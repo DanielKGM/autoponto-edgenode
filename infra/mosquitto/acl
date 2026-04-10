@@ -1,0 +1,7 @@
+user device
+pattern read cmd/%c
+pattern write sts/%c
+pattern write log/%c
+
+user service
+topic readwrite #

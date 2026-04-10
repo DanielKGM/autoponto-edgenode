@@ -1,0 +1,52 @@
+.env
+.env.*
+!.env.example
+get-docker.sh
+
+# =========================
+# PYTHON
+# =========================
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.log
+*.sqlite3
+
+# =========================
+# VENV
+# =========================
+.venv/
+venv/
+
+# =========================
+# LOCAL DATA
+# =========================
+data/*
+
+# keeps the data folders in git
+!data/sqlite/.gitkeep
+!data/frames/.gitkeep
+!data/models/.gitkeep
+
+# =========================
+# DOCKER
+# =========================
+docker-compose.override.yml
+
+# =========================
+# MOSQUITTO / REDIS
+# =========================
+infra/mosquitto/passwd
+
+# =========================
+# OS
+# =========================
+.DS_Store
+Thumbs.db
+
+# =========================
+# IDE
+# =========================
+.vscode/
+.idea/
