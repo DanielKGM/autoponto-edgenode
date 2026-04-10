@@ -20,16 +20,6 @@ __pycache__/
 venv/
 
 # =========================
-# LOCAL DATA
-# =========================
-data/*
-
-# keeps the data folders in git
-!data/sqlite/.gitkeep
-!data/frames/.gitkeep
-!data/models/.gitkeep
-
-# =========================
 # DOCKER
 # =========================
 docker-compose.override.yml
