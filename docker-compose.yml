@@ -46,6 +46,47 @@ services:
     volumes:
       - ./data/tempframes:/edge-data/tempframes
 
+  mqtt-listener:
+    build:
+      context: .
+      dockerfile: ./services/mqtt-listener/Dockerfile
+    container_name: mqtt-listener
+    restart: unless-stopped
+    environment:
+      REDIS_PORT: "6379"
+      REDIS_HOST: "redis"
+      MQTT_HOST: "mosquitto"
+      MQTT_PORT: "1883"
+      MQTT_USER: "service"
+      MQTT_PASS: "${MQTT_PASS_SERVICE:-replace}"
+    depends_on:
+      - redis
+      - mosquitto
+    networks:
+      - edge-net
+      
+  face-worker:
+    build:
+      context: .
+      dockerfile: ./services/face-worker/Dockerfile
+    container_name: face-worker
+    restart: unless-stopped
+    environment:
+      REDIS_PORT: "6379"
+      REDIS_HOST: "redis"
+      MQTT_PORT: "${MQTT_PORT:-1883}"
+      MQTT_HOST: "mosquitto"
+      MQTT_USER: "service"
+      MQTT_PASS: "${MQTT_PASS_SERVICE:-replace}"
+      TEMPFRAMES_DIR: "/edge-data/tempframes"
+    depends_on:
+      - redis
+      - mosquitto
+    volumes:
+      - ./data/tempframes:/edge-data/tempframes
+    networks:
+      - edge-net
+
 networks:
   edge-net:
     name: edge-net

@@ -49,7 +49,6 @@ def enqueue_frame(device_id: str, locale_id: str | None, frame_bytes: bytes) -> 
     payload = {
         "deviceId": device_id,
         "localeId": locale_id,
-        "size": len(frame_bytes),
         "receivedAt": received_at,
         "framePath": frame_path,
     }
