@@ -17,7 +17,11 @@ def get_context(
     x_device_id: str = Header(default=""),
     _: None = Depends(validate_auth),
 ):
+    print("x_device_id =", repr(x_device_id))
+
     locale_id = get_locale_id_for_device(x_device_id)
+    print("locale_id =", repr(locale_id))
+
     if not locale_id:
         return {
             "lesson_name": "",
@@ -26,11 +30,15 @@ def get_context(
         }
 
     schedule = get_schedule_for_locale(locale_id)
+    print("schedule =", schedule)
+
     context = compute_context(schedule)
+    print("context =", context)
+
     return context.to_payload()
 
 
-@app.post("/frames")
+@app.post("/frame")
 async def post_frame(
     request: Request,
     x_device_id: str = Header(default=""),
