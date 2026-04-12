@@ -37,14 +37,11 @@ services:
       REDIS_HOST: "redis"
       EDGE_SHARED_AUTH: "${EDGE_SHARED_AUTH:-replace}"
       ZONE_INFO: "${ZONE_INFO:-America/Fortaleza}"
-      TEMPFRAMES_DIR: "/edge-data/tempframes"
       MAX_FRAME_QUEUE: "${MAX_FRAME_QUEUE:-100}"
     depends_on:
       - redis
     networks:
       - edge-net
-    volumes:
-      - ./data/tempframes:/edge-data/tempframes
 
   mqtt-listener:
     build:
@@ -78,12 +75,9 @@ services:
       MQTT_HOST: "mosquitto"
       MQTT_USER: "service"
       MQTT_PASS: "${MQTT_PASS_SERVICE:-replace}"
-      TEMPFRAMES_DIR: "/edge-data/tempframes"
     depends_on:
       - redis
       - mosquitto
-    volumes:
-      - ./data/tempframes:/edge-data/tempframes
     networks:
       - edge-net
 

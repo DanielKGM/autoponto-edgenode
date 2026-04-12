@@ -1,9 +1,9 @@
 import json
 import os
-from pathlib import Path
 
-import redis
+import msgpack
 import paho.mqtt.client as mqtt
+import redis
 
 
 REDIS_HOST = os.getenv("REDIS_HOST")
@@ -21,7 +21,7 @@ def get_redis() -> redis.Redis:
     return redis.Redis(
         host=REDIS_HOST,
         port=REDIS_PORT,
-        decode_responses=True,
+        decode_responses=False,
     )
 
 
@@ -32,26 +32,25 @@ def build_mqtt():
     client.loop_start()
     return client
 
+
+def unpack_item(item_raw: bytes) -> dict:
+    return msgpack.unpackb(item_raw, raw=False)
+
+
 # mock
-# TODO: real face recognition
-def process_item(mqtt_client: mqtt.Client, item_raw: str):
-    item = json.loads(item_raw)
+# TODO: pipeline real de visão computacional
+def process_item(mqtt_client: mqtt.Client, item_raw: bytes):
+    item = unpack_item(item_raw)
 
     device_id = item["deviceId"]
-    frame_path = item["framePath"]
+    locale_id = item.get("localeId")
+    frame_bytes = item["frame"]
+    received_at = item.get("receivedAt")
 
-    exists = Path(frame_path).exists()
-
-    if exists:
-        payload = {
-            "auth": True,
-            "msg": "Autenticado com sucesso!",
-        }
-    else:
-        payload = {
-            "auth": False,
-            "msg": "Erro ao autenticar! Tente novamente.",
-        }
+    payload = {
+        "auth": True,
+        "msg": "Autenticado com sucesso!",
+    }
 
     mqtt_client.publish(
         f"cmd/{device_id}",
@@ -60,20 +59,17 @@ def process_item(mqtt_client: mqtt.Client, item_raw: str):
         retain=False,
     )
 
-    if exists:
-        try:
-            Path(frame_path).unlink()
-        except Exception as exc:
-            print(f"[face-worker] failed deleting {frame_path}: {exc}", flush=True)
-
-    print(f"[face-worker] processed device={device_id} exists={exists}", flush=True)
+    print(
+        f"processed device={device_id} locale={locale_id}",
+        flush=True,
+    )
 
 
 def main():
     r = get_redis()
     mqtt_client = build_mqtt()
 
-    print("[face-worker] waiting for frames...", flush=True)
+    print("waiting for frames...", flush=True)
 
     while True:
         item = r.blpop(QUEUE_KEY, timeout=0)
