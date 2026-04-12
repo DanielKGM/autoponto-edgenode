@@ -24,6 +24,10 @@ data/**/*
 !data/**/
 !data/models/.gitkeep
 
+# temp
+load_embedding.py
+*.npy
+
 # =========================
 # DOCKER
 # =========================

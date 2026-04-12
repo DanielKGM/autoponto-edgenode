@@ -1,6 +1,6 @@
 from datetime import datetime
 from zoneinfo import ZoneInfo
-from app.models import DeviceContext, ScheduleEntry
+from models import DeviceContext, ScheduleEntry
 import os
 
 TZ = ZoneInfo(os.getenv("ZONE_INFO", "America/Fortaleza"))

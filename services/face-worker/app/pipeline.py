@@ -1,6 +1,6 @@
 import os
-from app.vision import VisionPipeline
-from app.embeddings_store import load_all_embeddings
+from vision import VisionPipeline
+from embeddings_store import load_all_embeddings
 
 FACE_MATCH_THRESHOLD = float(os.getenv("FACE_MATCH_THRESHOLD", "0.363"))
 

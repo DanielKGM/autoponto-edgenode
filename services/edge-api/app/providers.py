@@ -1,6 +1,6 @@
 from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
-from app.models import ScheduleEntry
+from models import ScheduleEntry
 import os
 
 TZ = ZoneInfo(os.getenv("ZONE_INFO", "America/Fortaleza"))

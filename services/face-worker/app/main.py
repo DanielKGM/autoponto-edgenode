@@ -1,6 +1,6 @@
-from app.queue_io import pop_frame_blocking
-from app.mqtt_io import build_mqtt, publish_result
-from app.pipeline import RecognitionService
+from queue_io import pop_frame_blocking
+from mqtt_io import build_mqtt, publish_result
+from pipeline import RecognitionService
 
 
 def main():

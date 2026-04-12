@@ -1,7 +1,7 @@
 from fastapi import FastAPI, Header, HTTPException, Request, Depends
-from app.providers import get_locale_id_for_device, get_schedule_for_locale
-from app.context_logic import compute_context
-from app.redis_queue import enqueue_frame, is_queue_full, get_queue_length
+from providers import get_locale_id_for_device, get_schedule_for_locale
+from context_logic import compute_context
+from redis_queue import enqueue_frame, is_queue_full, get_queue_length
 import os
 
 app = FastAPI(title="edge-api")

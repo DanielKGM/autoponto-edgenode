@@ -26,6 +26,13 @@ class VisionPipeline:
         try:
             np_buf = np.frombuffer(frame_bytes, dtype=np.uint8)
             return cv2.imdecode(np_buf, cv2.IMREAD_COLOR)
+            
+            if image is None:
+                return None
+
+            # optional fix
+            image = cv2.rotate(image, cv2.ROTATE_90_CLOCKWISE)
+
         except Exception:
             return None
 
