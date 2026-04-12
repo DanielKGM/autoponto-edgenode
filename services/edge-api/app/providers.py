@@ -3,11 +3,12 @@ from zoneinfo import ZoneInfo
 from models import ScheduleEntry
 import os
 
-TZ = ZoneInfo(os.getenv("ZONE_INFO", "America/Fortaleza"))
+TZ = ZoneInfo(os.getenv("ZONE_INFO"))
 
 DEVICE_LOCALE_MAP = {
     "9084CED6CDC0": "salateste",
 }
+
 
 def get_locale_id_for_device(device_id: str) -> str | None:
     return DEVICE_LOCALE_MAP.get(device_id)

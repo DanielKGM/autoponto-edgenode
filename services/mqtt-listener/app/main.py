@@ -55,7 +55,7 @@ def on_message(client, userdata, msg):
         now,
     )
 
-    print(f"[mqtt-listener] {device_id} -> {payload}", flush=True)
+    print(f"{device_id} -> {payload}", flush=True)
 
 
 def main():

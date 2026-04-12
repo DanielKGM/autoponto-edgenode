@@ -12,10 +12,11 @@ def main():
     while True:
         item = pop_frame_blocking()
 
+        if not item:
+            continue
+
         device_id = item["deviceId"]
-        locale_id = item.get("localeId")
         frame_bytes = item["frame"]
-        received_at = item.get("receivedAt")
 
         result = recognition.recognize(frame_bytes)
 

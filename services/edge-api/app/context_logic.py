@@ -3,7 +3,8 @@ from zoneinfo import ZoneInfo
 from models import DeviceContext, ScheduleEntry
 import os
 
-TZ = ZoneInfo(os.getenv("ZONE_INFO", "America/Fortaleza"))
+TZ = ZoneInfo(os.getenv("ZONE_INFO"))
+
 
 def compute_context(entries: list[ScheduleEntry]) -> DeviceContext:
     now = datetime.now(TZ)

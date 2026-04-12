@@ -2,9 +2,9 @@ import os
 import cv2
 import numpy as np
 
-YUNET_MODEL_PATH = os.getenv("YUNET_MODEL_PATH", "/models/face_detection_yunet.onnx")
-SFACE_MODEL_PATH = os.getenv("SFACE_MODEL_PATH", "/models/face_recognition_sface.onnx")
-FACE_SCORE_THRESHOLD = float(os.getenv("FACE_SCORE_THRESHOLD", "0.85"))
+YUNET_MODEL_PATH = os.getenv("YUNET_MODEL_PATH")
+SFACE_MODEL_PATH = os.getenv("SFACE_MODEL_PATH")
+FACE_SCORE_THRESHOLD = float(os.getenv("FACE_SCORE_THRESHOLD"))
 
 
 class VisionPipeline:
@@ -25,13 +25,14 @@ class VisionPipeline:
     def decode_jpeg(self, frame_bytes: bytes) -> np.ndarray | None:
         try:
             np_buf = np.frombuffer(frame_bytes, dtype=np.uint8)
-            return cv2.imdecode(np_buf, cv2.IMREAD_COLOR)
-            
+
             if image is None:
                 return None
 
             # optional fix
             image = cv2.rotate(image, cv2.ROTATE_90_CLOCKWISE)
+
+            return cv2.imdecode(np_buf, cv2.IMREAD_COLOR)
 
         except Exception:
             return None

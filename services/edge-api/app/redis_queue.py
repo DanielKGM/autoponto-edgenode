@@ -4,9 +4,9 @@ from datetime import datetime, timezone
 import msgpack
 import redis
 
-REDIS_HOST = os.getenv("REDIS_HOST", "redis")
-REDIS_PORT = int(os.getenv("REDIS_PORT", "6379"))
-MAX_FRAME_QUEUE = int(os.getenv("MAX_FRAME_QUEUE", "100"))
+REDIS_HOST = os.getenv("REDIS_HOST")
+REDIS_PORT = int(os.getenv("REDIS_PORT"))
+MAX_FRAME_QUEUE = int(os.getenv("MAX_FRAME_QUEUE"))
 
 QUEUE_KEY = "queue:frames"
 

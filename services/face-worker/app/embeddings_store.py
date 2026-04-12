@@ -3,8 +3,8 @@ import pickle
 import redis
 import numpy as np
 
-REDIS_HOST = os.getenv("REDIS_HOST", "redis")
-REDIS_PORT = int(os.getenv("REDIS_PORT", "6379"))
+REDIS_HOST = os.getenv("REDIS_HOST")
+REDIS_PORT = int(os.getenv("REDIS_PORT"))
 
 EMBEDDINGS_KEY = "face:embeddings"
 

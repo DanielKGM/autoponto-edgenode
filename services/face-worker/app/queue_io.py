@@ -4,8 +4,8 @@ import redis
 
 QUEUE_KEY = "queue:frames"
 
-REDIS_HOST = os.getenv("REDIS_HOST", "redis")
-REDIS_PORT = int(os.getenv("REDIS_PORT", "6379"))
+REDIS_HOST = os.getenv("REDIS_HOST")
+REDIS_PORT = int(os.getenv("REDIS_PORT"))
 
 
 def get_redis() -> redis.Redis:

@@ -2,7 +2,7 @@ import os
 from vision import VisionPipeline
 from embeddings_store import load_all_embeddings
 
-FACE_MATCH_THRESHOLD = float(os.getenv("FACE_MATCH_THRESHOLD", "0.363"))
+FACE_MATCH_THRESHOLD = float(os.getenv("FACE_MATCH_THRESHOLD"))
 
 
 class RecognitionService:
