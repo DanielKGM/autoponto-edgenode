@@ -75,6 +75,12 @@ services:
       MQTT_HOST: "mosquitto"
       MQTT_USER: "service"
       MQTT_PASS: "${MQTT_PASS_SERVICE:-replace}"
+      YUNET_MODEL_PATH: "/models/face_detection_yunet.onnx"
+      SFACE_MODEL_PATH: "/models/face_recognition_sface.onnx"
+      FACE_SCORE_THRESHOLD: "${FACE_SCORE_THRESHOLD:-0.85}"
+      FACE_MATCH_THRESHOLD: "${FACE_MATCH_THRESHOLD:-0.363}"
+    volumes:
+      - ./data/models:/models:ro
     depends_on:
       - redis
       - mosquitto

@@ -22,7 +22,7 @@ venv/
 # DATA
 data/**/*
 !data/**/
-!data/tempframes/.gitkeep
+!data/models/.gitkeep
 
 # =========================
 # DOCKER

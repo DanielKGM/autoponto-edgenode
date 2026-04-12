@@ -28,7 +28,7 @@ def is_queue_full() -> bool:
     return get_queue_length() >= MAX_FRAME_QUEUE
 
 
-def enqueue_frame(device_id: str, locale_id: str | None, frame_bytes: bytes) -> dict:
+def enqueue_frame(device_id: str, locale_id: str | None, frame_bytes: bytes) -> int:
     payload = {
         "deviceId": device_id,
         "localeId": locale_id,
@@ -41,9 +41,4 @@ def enqueue_frame(device_id: str, locale_id: str | None, frame_bytes: bytes) -> 
     client = get_redis()
     client.rpush(QUEUE_KEY, packed)
 
-    return {
-        "deviceId": device_id,
-        "localeId": locale_id,
-        "size": len(frame_bytes),
-        "queueLength": get_queue_length(),
-    }
+    return get_queue_length()

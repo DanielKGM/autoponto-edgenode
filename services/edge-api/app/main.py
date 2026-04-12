@@ -65,8 +65,9 @@ async def post_frame(
         raise HTTPException(status_code=400, detail="empty body")
 
     locale_id = get_locale_id_for_device(x_device_id)
-    item = enqueue_frame(x_device_id, locale_id, body)
+    queue_len = enqueue_frame(x_device_id, locale_id, body)
 
     return {
         "ok": True,
+        "queue_len": queue_len,
     }

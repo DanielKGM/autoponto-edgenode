@@ -51,25 +51,34 @@ cp .env.example .env
 
 2. API local
 
-POST /frames ( )
-GET /context/{device_id} ( )
+POST /frames (X)
+GET /context/{device_id} (X)
 
 3. MQTT listener
 
-ler sts/+ ( )
-salvar no Redis: ( )
+ler sts/+ (X)
+salvar no Redis: (X)
 estado 
 timestamp
 
 4. Mock de reconhecimento
 
-sem IA ainda ( )
-só consome fila e responde MQTT de teste ( )
+sem IA ainda (X)
+só consome fila e responde MQTT de teste (X)
 
 5. Reconhecimento real
 
-OpenCV + ONNX Runtime ( )
-embeddings e matching ( )
+OpenCV + ONNX Runtime (X)
+embeddings e matching (X)
+
+Modelos ([OpenCV Zoo](https://github.com/opencv/opencv_zoo/tree/main)):
+
+```bash
+wget https://github.com/opencv/opencv_zoo/raw/main/models/face_detection_yunet/face_detection_yunet_2023mar.onnx -O ./data/models/face_detection_yunet.onnx
+
+wget https://github.com/opencv/opencv_zoo/raw/main/models/face_recognition_sface/face_recognition_sface_2021dec.onnx -O ./data/models/face_recognition_sface.onnx
+```
+
 
 6. Sincronização com nuvem
 
