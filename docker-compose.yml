@@ -79,6 +79,8 @@ services:
       SFACE_MODEL_PATH: "/models/face_recognition_sface.onnx"
       FACE_SCORE_THRESHOLD: "${FACE_SCORE_THRESHOLD:-0.85}"
       FACE_MATCH_THRESHOLD: "${FACE_MATCH_THRESHOLD:-0.363}"
+      ROTATE_ESP_FRAMES: "${ROTATE_ESP_FRAMES:-true}"
+      LOG_LEVEL: "${LOG_LEVEL:-INFO}"
     volumes:
       - ./data/models:/models:ro
     depends_on:

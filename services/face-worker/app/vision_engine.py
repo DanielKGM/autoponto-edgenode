@@ -1,13 +1,18 @@
+import logging
 import os
+
 import cv2
 import numpy as np
+
+logger = logging.getLogger(__name__)
 
 YUNET_MODEL_PATH = os.getenv("YUNET_MODEL_PATH")
 SFACE_MODEL_PATH = os.getenv("SFACE_MODEL_PATH")
 FACE_SCORE_THRESHOLD = float(os.getenv("FACE_SCORE_THRESHOLD"))
+ROTATE_ESP_FRAMES = os.getenv("ROTATE_ESP_FRAMES").lower() == "true"
 
 
-class VisionPipeline:
+class VisionEngine:
     def __init__(self):
         self.detector = cv2.FaceDetectorYN.create(
             YUNET_MODEL_PATH,
@@ -25,35 +30,42 @@ class VisionPipeline:
     def decode_jpeg(self, frame_bytes: bytes) -> np.ndarray | None:
         try:
             np_buf = np.frombuffer(frame_bytes, dtype=np.uint8)
+            image = cv2.imdecode(np_buf, cv2.IMREAD_COLOR)
 
             if image is None:
+                logger.warning("jpeg decode returned None")
                 return None
 
-            # optional fix
-            image = cv2.rotate(image, cv2.ROTATE_90_CLOCKWISE)
+            if ROTATE_ESP_FRAMES:
+                image = cv2.rotate(image, cv2.ROTATE_90_CLOCKWISE)
 
-            return cv2.imdecode(np_buf, cv2.IMREAD_COLOR)
-
-        except Exception:
+            return image
+        except Exception as exc:
+            logger.exception("failed to decode jpeg: %s", exc)
             return None
 
     def detect_best_face(self, image: np.ndarray):
-        h, w = image.shape[:2]
-        self.detector.setInputSize((w, h))
-        _, faces = self.detector.detect(image)
+        try:
+            h, w = image.shape[:2]
+            self.detector.setInputSize((w, h))
+            _, faces = self.detector.detect(image)
 
-        if faces is None or len(faces) == 0:
+            if faces is None or len(faces) == 0:
+                return None
+
+            faces = sorted(faces, key=lambda f: float(f[14]), reverse=True)
+            return faces[0]
+        except Exception as exc:
+            logger.exception("failed during face detection: %s", exc)
             return None
-
-        faces = sorted(faces, key=lambda f: float(f[14]), reverse=True)
-        return faces[0]
 
     def extract_embedding(self, image: np.ndarray, face) -> np.ndarray | None:
         try:
             aligned = self.recognizer.alignCrop(image, face)
             feat = self.recognizer.feature(aligned)
             return feat
-        except Exception:
+        except Exception as exc:
+            logger.exception("failed during embedding extraction: %s", exc)
             return None
 
     def compare(self, feat1: np.ndarray, feat2: np.ndarray) -> float:
