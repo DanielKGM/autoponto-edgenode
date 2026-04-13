@@ -1,13 +1,21 @@
+import logging
+import os
+
 from fastapi import FastAPI, Header, HTTPException, Request, Depends
 from app.providers import get_locale_id_for_device, get_schedule_for_locale
 from app.context_logic import compute_context
 from app.redis_queue import enqueue_frame, is_queue_full
-import os
 
 app = FastAPI(title="edge-api")
 
-
 EDGE_SHARED_AUTH = os.getenv("EDGE_SHARED_AUTH")
+LOG_LEVEL = os.getenv("LOG_LEVEL").upper()
+
+logging.basicConfig(
+    level=getattr(logging, LOG_LEVEL, logging.INFO),
+    format="%(asctime)s %(levelname)s %(name)s - %(message)s",
+)
+logger = logging.getLogger("edge-api")
 
 
 def validate_auth(x_auth: str = Header(default="")) -> None:
@@ -29,7 +37,9 @@ def get_context(
     _: None = Depends(validate_auth),
 ):
     locale_id = get_locale_id_for_device(x_device_id)
+
     if not locale_id:
+        logger.info("context device=%s locale=not_found", x_device_id)
         return {
             "lesson_name": "",
             "msRemaining": 0,
@@ -38,6 +48,16 @@ def get_context(
 
     schedule = get_schedule_for_locale(locale_id)
     context = compute_context(schedule)
+
+    logger.info(
+        "context device=%s locale=%s lesson=%s msRemaining=%s msForNext=%s",
+        x_device_id,
+        locale_id,
+        context.lesson_name,
+        context.ms_remaining,
+        context.ms_for_next,
+    )
+
     return context.to_payload()
 
 
@@ -51,6 +71,7 @@ async def post_frame(
         raise HTTPException(status_code=400, detail="missing X-Device-Id")
 
     if is_queue_full():
+        logger.warning("frame rejected device=%s reason=queue_full", x_device_id)
         raise HTTPException(
             status_code=503,
             detail="frame queue full",
@@ -66,6 +87,14 @@ async def post_frame(
 
     locale_id = get_locale_id_for_device(x_device_id)
     queue_len = enqueue_frame(x_device_id, locale_id, body)
+
+    logger.info(
+        "frame accepted device=%s locale=%s bytes=%d queue_len=%d",
+        x_device_id,
+        locale_id,
+        len(body),
+        queue_len,
+    )
 
     return {
         "ok": True,

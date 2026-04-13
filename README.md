@@ -32,6 +32,15 @@ sudo systemctl enable edge-node
 #test sudo systemctl start edge-node \ systemctl status edge-node
 ```
 
+mDNS autopontonode.local
+
+```bash
+sudo hostnamectl set-hostname autopontonode
+sudo apt update
+sudo apt install avahi-daemon
+sudo systemctl enable avahi-daemon
+sudo systemctl start avahi-daemon
+```
 
 1. Infra local
 

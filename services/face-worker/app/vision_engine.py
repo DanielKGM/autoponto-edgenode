@@ -6,8 +6,8 @@ import numpy as np
 
 logger = logging.getLogger(__name__)
 
-YUNET_MODEL_PATH = os.getenv("YUNET_MODEL_PATH")
-SFACE_MODEL_PATH = os.getenv("SFACE_MODEL_PATH")
+DETECT_MODEL_PATH = os.getenv("DETECT_MODEL_PATH")
+RECOG_MODEL_PATH = os.getenv("RECOG_MODEL_PATH")
 FACE_SCORE_THRESHOLD = float(os.getenv("FACE_SCORE_THRESHOLD"))
 ROTATE_ESP_FRAMES = os.getenv("ROTATE_ESP_FRAMES").lower() == "true"
 
@@ -15,7 +15,7 @@ ROTATE_ESP_FRAMES = os.getenv("ROTATE_ESP_FRAMES").lower() == "true"
 class VisionEngine:
     def __init__(self):
         self.detector = cv2.FaceDetectorYN.create(
-            YUNET_MODEL_PATH,
+            DETECT_MODEL_PATH,
             "",
             (240, 240),
             FACE_SCORE_THRESHOLD,
@@ -23,7 +23,7 @@ class VisionEngine:
             5000,
         )
         self.recognizer = cv2.FaceRecognizerSF.create(
-            SFACE_MODEL_PATH,
+            RECOG_MODEL_PATH,
             "",
         )
 

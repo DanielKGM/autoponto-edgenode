@@ -38,6 +38,7 @@ services:
       EDGE_SHARED_AUTH: "${EDGE_SHARED_AUTH:-replace}"
       ZONE_INFO: "${ZONE_INFO:-America/Fortaleza}"
       MAX_FRAME_QUEUE: "${MAX_FRAME_QUEUE:-100}"
+      LOG_LEVEL: "${LOG_LEVEL:-INFO}"
     depends_on:
       - redis
     networks:
@@ -75,8 +76,8 @@ services:
       MQTT_HOST: "mosquitto"
       MQTT_USER: "service"
       MQTT_PASS: "${MQTT_PASS_SERVICE:-replace}"
-      YUNET_MODEL_PATH: "/models/face_detection_yunet.onnx"
-      SFACE_MODEL_PATH: "/models/face_recognition_sface.onnx"
+      DETECT_MODEL_PATH: "/models/face_detection_yunet.onnx"
+      RECOG_MODEL_PATH: "/models/face_recognition_sface.onnx"
       FACE_SCORE_THRESHOLD: "${FACE_SCORE_THRESHOLD:-0.85}"
       FACE_MATCH_THRESHOLD: "${FACE_MATCH_THRESHOLD:-0.363}"
       ROTATE_ESP_FRAMES: "${ROTATE_ESP_FRAMES:-true}"
