@@ -51,7 +51,7 @@ def main():
             if result["ok"]:
                 payload = {
                     "auth": True,
-                    "msg": "Autenticado com sucesso!",
+                    "msg": result["studentId"],
                 }
                 logger.info(
                     "recognition success device=%s student=%s score=%.4f",
