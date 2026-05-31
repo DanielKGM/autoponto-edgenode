@@ -30,7 +30,7 @@ def compute_context(entries: list[ScheduleEntry]) -> DeviceContext:
 
     if upcoming:
         return DeviceContext(
-            lesson_name="",
+            lesson_name=upcoming.lesson_name,
             ms_remaining=0,
             ms_for_next=max(int((upcoming.starts_at - now).total_seconds() * 1000), 0),
         )

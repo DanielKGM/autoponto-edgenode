@@ -9,7 +9,6 @@ logger = logging.getLogger(__name__)
 DETECT_MODEL_PATH = os.getenv("DETECT_MODEL_PATH")
 RECOG_MODEL_PATH = os.getenv("RECOG_MODEL_PATH")
 FACE_SCORE_THRESHOLD = float(os.getenv("FACE_SCORE_THRESHOLD"))
-ROTATE_ESP_FRAMES = os.getenv("ROTATE_ESP_FRAMES").lower() == "true"
 
 
 class VisionEngine:
@@ -35,9 +34,6 @@ class VisionEngine:
             if image is None:
                 logger.warning("jpeg decode returned None")
                 return None
-
-            if ROTATE_ESP_FRAMES:
-                image = cv2.rotate(image, cv2.ROTATE_90_CLOCKWISE)
 
             return image
         except Exception as exc:
