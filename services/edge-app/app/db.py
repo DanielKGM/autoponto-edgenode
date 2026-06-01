@@ -59,7 +59,8 @@ CREATE TABLE IF NOT EXISTS attendance_events (
   device_id TEXT NOT NULL,
   recognized_at TEXT NOT NULL,
   score REAL NOT NULL,
-  sync_status TEXT NOT NULL DEFAULT 'pending'
+  sync_status TEXT NOT NULL DEFAULT 'pending',
+  UNIQUE(student_id, lesson_id)
 );
 
 CREATE TABLE IF NOT EXISTS sync_state (
@@ -70,6 +71,8 @@ CREATE TABLE IF NOT EXISTS sync_state (
 CREATE INDEX IF NOT EXISTS idx_lessons_locale_time ON lessons(locale_id, starts_at, ends_at);
 CREATE INDEX IF NOT EXISTS idx_embeddings_student ON face_embeddings(student_id);
 CREATE INDEX IF NOT EXISTS idx_attendance_sync ON attendance_events(sync_status);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_attendance_student_lesson
+  ON attendance_events(student_id, lesson_id);
 """
 
 

@@ -2,6 +2,7 @@ import logging
 import os
 import traceback
 
+from app.debug_frames import DebugFrameSaver
 from app.mqtt_client import build_mqtt_client, publish_result
 from app.recognition_service import RecognitionService
 from app.storage import Storage
@@ -24,6 +25,7 @@ def main():
     storage = Storage()
     mqtt_client = build_mqtt_client()
     recognition = RecognitionService(storage)
+    debug_frames = DebugFrameSaver()
 
     logger.info("waiting for frames...")
 
@@ -38,6 +40,9 @@ def main():
             lesson_id = item.get("lessonId")
             received_at = item.get("receivedAt")
             frame_bytes = item["frame"]
+            saved_frame = debug_frames.save(device_id, lesson_id, frame_bytes)
+            if saved_frame:
+                logger.info("debug frame saved path=%s", saved_frame)
 
             if not lesson_id:
                 logger.info(
@@ -72,9 +77,10 @@ def main():
                 )
                 publish_result(mqtt_client, device_id, payload)
                 logger.info(
-                    "recognition success device=%s student=%s score=%.4f",
+                    "recognition success device=%s student=%s embedding_id=%s score=%.4f",
                     device_id,
                     result["studentId"],
+                    result.get("embeddingId"),
                     result["score"],
                 )
             else:

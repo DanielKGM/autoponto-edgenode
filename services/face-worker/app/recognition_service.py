@@ -42,19 +42,23 @@ class RecognitionService:
         known = self.storage.load_embeddings_for_lesson(lesson_id)
 
         best_student = None
+        best_embedding_id = None
         best_score = -1.0
 
-        for student_id, known_emb in known:
+        for embedding_id, student_id, known_emb in known:
             score = self.vision.compare(embedding, known_emb)
             if score > best_score:
                 best_score = score
                 best_student = student_id
+                best_embedding_id = embedding_id
 
         elapsed_ms = round((time.perf_counter() - t0) * 1000, 2)
 
         if best_student is None or best_score < FACE_MATCH_THRESHOLD:
             logger.info(
-                "recognition miss score=%.4f threshold=%.4f elapsed_ms=%s",
+                "recognition miss best_student=%s best_embedding_id=%s score=%.4f threshold=%.4f elapsed_ms=%s",
+                best_student,
+                best_embedding_id,
                 best_score,
                 FACE_MATCH_THRESHOLD,
                 elapsed_ms,
@@ -62,19 +66,23 @@ class RecognitionService:
             return {
                 "ok": False,
                 "reason": "not_recognized",
+                "studentId": best_student,
+                "embeddingId": best_embedding_id,
                 "score": best_score,
                 "elapsedMs": elapsed_ms,
             }
 
         logger.info(
-            "recognition hit student=%s score=%.4f elapsed_ms=%s",
+            "recognition hit student=%s embedding_id=%s score=%.4f elapsed_ms=%s",
             best_student,
+            best_embedding_id,
             best_score,
             elapsed_ms,
         )
         return {
             "ok": True,
             "studentId": best_student,
+            "embeddingId": best_embedding_id,
             "score": best_score,
             "elapsedMs": elapsed_ms,
         }

@@ -18,6 +18,8 @@ services:
     container_name: edge-redis
     restart: unless-stopped
     command: ["redis-server", "/usr/local/etc/redis/redis.conf"]
+    ports:
+      - "${REDIS_BIND:-127.0.0.1}:${REDIS_PORT:-6379}:6379"
     volumes:
       - ./infra/redis/redis.conf:/usr/local/etc/redis/redis.conf:ro
       - redis_data:/data
@@ -49,7 +51,7 @@ services:
       MAIN_API_TOKEN: "${MAIN_API_TOKEN:-}"
       SYNC_INTERVAL_SECONDS: "${SYNC_INTERVAL_SECONDS:-60}"
     volumes:
-      - edge_data:/data
+      - ${EDGE_DATA_DIR:-./data/edge}:/data
     depends_on:
       - redis
       - mosquitto
@@ -73,9 +75,13 @@ services:
       RECOG_MODEL_PATH: "/models/face_recognition_sface.onnx"
       FACE_SCORE_THRESHOLD: "${FACE_SCORE_THRESHOLD:-0.85}"
       FACE_MATCH_THRESHOLD: "${FACE_MATCH_THRESHOLD:-0.363}"
+      DEBUG_SAVE_FRAMES: "${DEBUG_SAVE_FRAMES:-false}"
+      DEBUG_FRAMES_DIR: "/debug/frames"
+      DEBUG_MAX_FRAMES: "${DEBUG_MAX_FRAMES:-10}"
       LOG_LEVEL: "${LOG_LEVEL:-INFO}"
     volumes:
       - ./data/models:/models:ro
+      - ./data/debug/frames:/debug/frames
     depends_on:
       - redis
       - mosquitto
@@ -90,4 +96,3 @@ networks:
 volumes:
   mosquitto_data:
   redis_data:
-  edge_data:

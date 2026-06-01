@@ -47,6 +47,15 @@ def get_current_lesson_for_device(device_id: str) -> Lesson | None:
 
     ordered = sorted(rows, key=lambda row: parse_dt(row["starts_at"]))
     for row in ordered:
+        # TODO: remove this temp part
+        return Lesson(
+            id=row["id"],
+            name=row["name"],
+            locale_id=row["locale_id"],
+            starts_at=parse_dt(row["starts_at"]),
+            ends_at=parse_dt(row["ends_at"]),
+        )
+        # temp end
         starts_at = parse_dt(row["starts_at"])
         ends_at = parse_dt(row["ends_at"])
         if starts_at <= now < ends_at:
@@ -81,6 +90,17 @@ def compute_context_for_device(device_id: str) -> DeviceContext:
     upcoming = None
     ordered = sorted(rows, key=lambda row: parse_dt(row["starts_at"]))
     for row in ordered:
+
+        # TODO: remove this temp part
+        return DeviceContext(
+            lesson_name=row["name"],
+            ms_remaining=300000,
+            ms_for_next=0,
+            lesson_id=row["id"],
+            locale_id=locale_id,
+        )
+        # temp end
+
         starts_at = parse_dt(row["starts_at"])
         ends_at = parse_dt(row["ends_at"])
         if starts_at <= now_dt < ends_at:
@@ -104,15 +124,28 @@ def compute_context_for_device(device_id: str) -> DeviceContext:
             locale_id=locale_id,
         )
 
-    return DeviceContext(lesson_name="", ms_remaining=0, ms_for_next=0, locale_id=locale_id)
+    return DeviceContext(
+        lesson_name="", ms_remaining=0, ms_for_next=0, locale_id=locale_id
+    )
 
 
 def save_attendance_event(event: dict) -> str:
     event_id = event.get("eventId") or str(uuid.uuid4())
     with transaction() as conn:
+        existing = conn.execute(
+            """
+            SELECT id
+            FROM attendance_events
+            WHERE student_id = ? AND lesson_id = ?
+            """,
+            (event["studentId"], event["lessonId"]),
+        ).fetchone()
+        if existing:
+            return existing["id"]
+
         conn.execute(
             """
-            INSERT OR IGNORE INTO attendance_events
+            INSERT INTO attendance_events
             (id, student_id, lesson_id, device_id, recognized_at, score, sync_status)
             VALUES (?, ?, ?, ?, ?, ?, 'pending')
             """,
@@ -133,14 +166,12 @@ def rebuild_runtime_cache() -> None:
         enrollment_rows = conn.execute(
             "SELECT lesson_id, student_id FROM enrollments"
         ).fetchall()
-        embedding_rows = conn.execute(
-            """
+        embedding_rows = conn.execute("""
             SELECT face_embeddings.id, face_embeddings.student_id, face_embeddings.embedding
             FROM face_embeddings
             JOIN students ON students.id = face_embeddings.student_id
             WHERE students.active = 1
-            """
-        ).fetchall()
+            """).fetchall()
 
     lesson_students: dict[str, list[str]] = {}
     for row in enrollment_rows:

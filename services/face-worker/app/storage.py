@@ -29,7 +29,7 @@ class Storage:
         _, item_raw = self.redis.blpop(QUEUE_KEY, timeout=0)
         return msgpack.unpackb(item_raw, raw=False)
 
-    def load_embeddings_for_lesson(self, lesson_id: str) -> list[tuple[str, np.ndarray]]:
+    def load_embeddings_for_lesson(self, lesson_id: str) -> list[tuple[str, str, np.ndarray]]:
         student_ids = self.redis.smembers(f"lesson:{lesson_id}:students")
         if not student_ids:
             logger.info("no eligible students for lesson=%s", lesson_id)
@@ -42,9 +42,11 @@ class Storage:
         for embedding_id, emb_blob in raw.items():
             if not emb_blob:
                 continue
+            if isinstance(embedding_id, bytes):
+                embedding_id = embedding_id.decode("utf-8")
             student_id, embedding = self._decode_embedding_record(emb_blob)
             if student_id in eligible:
-                result.append((student_id, embedding))
+                result.append((embedding_id, student_id, embedding))
 
         logger.info("loaded %d eligible embeddings for lesson=%s", len(result), lesson_id)
         return result

@@ -12,8 +12,10 @@ __pycache__/
 *.pyd
 *.log
 *.sqlite3
+.pytest_cache
 
 .agents
+.codex
 
 # =========================
 # VENV
@@ -27,9 +29,8 @@ data/**/*
 !data/models/.gitkeep
 
 # temp
-#embeddings_mock
-load_embedding.py
-*.npy
+embeddings_mock
+data/debug
 
 # =========================
 # DOCKER
