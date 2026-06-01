@@ -24,32 +24,14 @@ services:
     networks:
       - edge-net
 
-  edge-api:
+  edge-app:
     build:
       context: .
-      dockerfile: ./services/edge-api/Dockerfile
-    container_name: edge-api
+      dockerfile: ./services/edge-app/Dockerfile
+    container_name: edge-app
     restart: unless-stopped
     ports:
       - "${EDGE_API_PORT:-8080}:8080"
-    environment:
-      REDIS_PORT: "6379"
-      REDIS_HOST: "redis"
-      EDGE_SHARED_AUTH: "${EDGE_SHARED_AUTH:-replace}"
-      ZONE_INFO: "${ZONE_INFO:-America/Fortaleza}"
-      MAX_FRAME_QUEUE: "${MAX_FRAME_QUEUE:-100}"
-      LOG_LEVEL: "${LOG_LEVEL:-INFO}"
-    depends_on:
-      - redis
-    networks:
-      - edge-net
-
-  mqtt-listener:
-    build:
-      context: .
-      dockerfile: ./services/mqtt-listener/Dockerfile
-    container_name: mqtt-listener
-    restart: unless-stopped
     environment:
       REDIS_PORT: "6379"
       REDIS_HOST: "redis"
@@ -57,6 +39,17 @@ services:
       MQTT_PORT: "1883"
       MQTT_USER: "service"
       MQTT_PASS: "${MQTT_PASS_SERVICE:-replace}"
+      EDGE_SHARED_AUTH: "${EDGE_SHARED_AUTH:-replace}"
+      ZONE_INFO: "${ZONE_INFO:-America/Fortaleza}"
+      MAX_FRAME_QUEUE: "${MAX_FRAME_QUEUE:-100}"
+      LOG_LEVEL: "${LOG_LEVEL:-INFO}"
+      SQLITE_PATH: "/data/edge.db"
+      NODE_ID: "${NODE_ID:-edge-node}"
+      MAIN_API_URL: "${MAIN_API_URL:-}"
+      MAIN_API_TOKEN: "${MAIN_API_TOKEN:-}"
+      SYNC_INTERVAL_SECONDS: "${SYNC_INTERVAL_SECONDS:-60}"
+    volumes:
+      - edge_data:/data
     depends_on:
       - redis
       - mosquitto
@@ -72,7 +65,7 @@ services:
     environment:
       REDIS_PORT: "6379"
       REDIS_HOST: "redis"
-      MQTT_PORT: "${MQTT_PORT:-1883}"
+      MQTT_PORT: "1883"
       MQTT_HOST: "mosquitto"
       MQTT_USER: "service"
       MQTT_PASS: "${MQTT_PASS_SERVICE:-replace}"
@@ -97,3 +90,4 @@ networks:
 volumes:
   mosquitto_data:
   redis_data:
+  edge_data:

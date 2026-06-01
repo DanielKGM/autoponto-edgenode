@@ -3,3 +3,5 @@ uvicorn[standard]
 redis
 pydantic
 msgpack
+paho-mqtt
+httpx

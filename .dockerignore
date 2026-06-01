@@ -1,0 +1,12 @@
+.git
+.venv
+venv
+__pycache__
+*.pyc
+.env
+.env.*
+!/.env.example
+data
+*.npy
+infra/mosquitto/passwd
+docker-compose.override.yml

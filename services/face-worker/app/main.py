@@ -35,24 +35,42 @@ def main():
 
             device_id = item["deviceId"]
             locale_id = item.get("localeId")
+            lesson_id = item.get("lessonId")
             received_at = item.get("receivedAt")
             frame_bytes = item["frame"]
 
+            if not lesson_id:
+                logger.info(
+                    "frame ignored device=%s reason=missing_lesson lesson=%s",
+                    device_id,
+                    lesson_id,
+                )
+                continue
+
             logger.info(
-                "frame received device=%s locale=%s bytes=%d receivedAt=%s",
+                "frame received device=%s locale=%s lesson=%s bytes=%d receivedAt=%s",
                 device_id,
                 locale_id,
+                lesson_id,
                 len(frame_bytes),
                 received_at,
             )
 
-            result = recognition.recognize(frame_bytes)
+            result = recognition.recognize(frame_bytes, lesson_id)
 
             if result["ok"]:
                 payload = {
                     "auth": True,
+                    "studentId": result["studentId"],
                     "msg": result["studentId"],
                 }
+                storage.enqueue_attendance_event(
+                    device_id=device_id,
+                    lesson_id=lesson_id,
+                    student_id=result["studentId"],
+                    score=result["score"],
+                )
+                publish_result(mqtt_client, device_id, payload)
                 logger.info(
                     "recognition success device=%s student=%s score=%.4f",
                     device_id,
@@ -60,17 +78,12 @@ def main():
                     result["score"],
                 )
             else:
-                payload = {
-                    "auth": False,
-                }
                 logger.info(
-                    "recognition failed device=%s reason=%s score=%s",
+                    "recognition failed without mqtt feedback device=%s reason=%s score=%s",
                     device_id,
                     result["reason"],
                     result.get("score"),
                 )
-
-            publish_result(mqtt_client, device_id, payload)
 
         except Exception as exc:
             logger.error("worker loop error: %s", exc)

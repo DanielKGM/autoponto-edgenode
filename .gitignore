@@ -13,6 +13,8 @@ __pycache__/
 *.log
 *.sqlite3
 
+.agents
+
 # =========================
 # VENV
 # =========================
@@ -25,6 +27,7 @@ data/**/*
 !data/models/.gitkeep
 
 # temp
+#embeddings_mock
 load_embedding.py
 *.npy
 

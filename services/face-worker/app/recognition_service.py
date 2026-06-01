@@ -15,7 +15,7 @@ class RecognitionService:
         self.storage = storage
         self.vision = VisionEngine()
 
-    def recognize(self, frame_bytes: bytes) -> dict:
+    def recognize(self, frame_bytes: bytes, lesson_id: str) -> dict:
         t0 = time.perf_counter()
 
         image = self.vision.decode_jpeg(frame_bytes)
@@ -39,12 +39,12 @@ class RecognitionService:
                 "reason": "embedding_failed",
             }
 
-        known = self.storage.load_all_embeddings()
+        known = self.storage.load_embeddings_for_lesson(lesson_id)
 
         best_student = None
         best_score = -1.0
 
-        for student_id, known_emb in known.items():
+        for student_id, known_emb in known:
             score = self.vision.compare(embedding, known_emb)
             if score > best_score:
                 best_score = score

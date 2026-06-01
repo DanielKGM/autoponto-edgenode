@@ -8,7 +8,7 @@ logger = logging.getLogger(__name__)
 
 DETECT_MODEL_PATH = os.getenv("DETECT_MODEL_PATH")
 RECOG_MODEL_PATH = os.getenv("RECOG_MODEL_PATH")
-FACE_SCORE_THRESHOLD = float(os.getenv("FACE_SCORE_THRESHOLD"))
+FACE_SCORE_THRESHOLD = float(os.getenv("FACE_SCORE_THRESHOLD", "0.85"))
 
 
 class VisionEngine:
