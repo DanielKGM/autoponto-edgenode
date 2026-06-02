@@ -35,7 +35,7 @@ class VisionEngine:
                 logger.warning("jpeg decode returned None")
                 return None
 
-            return image
+            return cv2.rotate(image, cv2.ROTATE_180)
         except Exception as exc:
             logger.exception("failed to decode jpeg: %s", exc)
             return None

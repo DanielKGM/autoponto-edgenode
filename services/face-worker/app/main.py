@@ -2,8 +2,6 @@ import logging
 import os
 import traceback
 
-from app.debug_frames import DebugFrameSaver
-from app.mqtt_client import build_mqtt_client, publish_result
 from app.recognition_service import RecognitionService
 from app.storage import Storage
 
@@ -23,9 +21,7 @@ def main():
     logger = logging.getLogger("face-worker")
 
     storage = Storage()
-    mqtt_client = build_mqtt_client()
     recognition = RecognitionService(storage)
-    debug_frames = DebugFrameSaver()
 
     logger.info("waiting for frames...")
 
@@ -40,9 +36,6 @@ def main():
             lesson_id = item.get("lessonId")
             received_at = item.get("receivedAt")
             frame_bytes = item["frame"]
-            saved_frame = debug_frames.save(device_id, lesson_id, frame_bytes)
-            if saved_frame:
-                logger.info("debug frame saved path=%s", saved_frame)
 
             if not lesson_id:
                 logger.info(
@@ -64,20 +57,14 @@ def main():
             result = recognition.recognize(frame_bytes, lesson_id)
 
             if result["ok"]:
-                payload = {
-                    "auth": True,
-                    "studentId": result["studentId"],
-                    "msg": result["studentId"],
-                }
                 storage.enqueue_attendance_event(
                     device_id=device_id,
                     lesson_id=lesson_id,
                     student_id=result["studentId"],
                     score=result["score"],
                 )
-                publish_result(mqtt_client, device_id, payload)
                 logger.info(
-                    "recognition success device=%s student=%s embedding_id=%s score=%.4f",
+                    "recognition success queued_attendance device=%s student=%s embedding_id=%s score=%.4f",
                     device_id,
                     result["studentId"],
                     result.get("embeddingId"),
@@ -85,10 +72,11 @@ def main():
                 )
             else:
                 logger.info(
-                    "recognition failed without mqtt feedback device=%s reason=%s score=%s",
+                    "recognition failed device=%s reason=%s score=%s %s",
                     device_id,
                     result["reason"],
                     result.get("score"),
+                    result.get("embeddingId"),
                 )
 
         except Exception as exc:

@@ -31,7 +31,7 @@ async def lifespan(app: FastAPI):
     mqtt_client = build_status_listener()
     mqtt_client.loop_start()
     tasks = [
-        asyncio.create_task(consume_attendance_events(stop_event)),
+        asyncio.create_task(consume_attendance_events(stop_event, mqtt_client)),
         asyncio.create_task(run_sync_loop(stop_event)),
     ]
     logger.info("edge-app started")

@@ -1,3 +1,4 @@
+import json
 import logging
 
 import paho.mqtt.client as mqtt
@@ -29,3 +30,9 @@ def build_status_listener() -> mqtt.Client:
     client.on_message = on_message
     client.connect(MQTT_HOST, MQTT_PORT, 60)
     return client
+
+
+def publish_command(client: mqtt.Client, device_id: str, payload: dict) -> None:
+    topic = f"cmd/{device_id}"
+    client.publish(topic, json.dumps(payload, ensure_ascii=False), qos=1, retain=False)
+    logger.info("published mqtt command to %s", topic)

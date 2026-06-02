@@ -20,7 +20,7 @@ ZONE_INFO = os.getenv("ZONE_INFO", "America/Fortaleza")
 MAX_FRAME_QUEUE = _int_env("MAX_FRAME_QUEUE", 100)
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 
-SQLITE_PATH = Path(os.getenv("SQLITE_PATH", "/data/edge.db"))
+SQLITE_PATH = Path(os.getenv("SQLITE_PATH", "/data/bd.db"))
 NODE_ID = os.getenv("NODE_ID", "edge-node")
 MAIN_API_URL = os.getenv("MAIN_API_URL", "").rstrip("/")
 MAIN_API_TOKEN = os.getenv("MAIN_API_TOKEN", "")

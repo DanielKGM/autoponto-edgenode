@@ -12,8 +12,8 @@ O node conversa com:
 
 Containers ativos:
 
-- `edge-app`: API HTTP, listener MQTT de status, SQLite local, sync e persistencia de presencas.
-- `face-worker`: processamento OpenCV/ONNX, reconhecimento facial e feedback MQTT positivo.
+- `edge-app`: API HTTP, listener/publicador MQTT, SQLite local, sync e persistencia de presencas.
+- `face-worker`: processamento OpenCV/ONNX e reconhecimento facial.
 - `redis`: fila de frames, fila de presencas e cache quente de embeddings/elegibilidade.
 - `mosquitto`: broker MQTT local para os ESP32.
 
@@ -23,10 +23,9 @@ O antigo `edge-api` e o antigo `mqtt-listener` foram fundidos no `edge-app`.
 flowchart LR
   ESP32[ESP32] -->|HTTP /context e /frame| EdgeApp[edge-app]
   ESP32 <-->|MQTT sts/cmd| Mosquitto[mosquitto]
-  EdgeApp <-->|status MQTT| Mosquitto
+  EdgeApp <-->|status e cmd MQTT| Mosquitto
   EdgeApp <-->|filas e cache| Redis[redis]
   FaceWorker[face-worker] <-->|frames, embeddings, presencas| Redis
-  FaceWorker -->|MQTT cmd positivo| Mosquitto
   EdgeApp <-->|polling sync| MainAPI[servidor principal]
   EdgeApp --> SQLite[(SQLite local)]
 ```
@@ -120,11 +119,10 @@ erDiagram
 4. `edge-app` so enfileira o frame se houver `lesson` atual para o dispositivo.
 5. `face-worker` consome `queue:frames`.
 6. O reconhecimento compara apenas embeddings de alunos matriculados naquela `lesson`.
-7. Em sucesso autorizado:
-   - publica `cmd/{device_id}` com `auth: true` e `studentId`;
-   - enfileira evento em `queue:attendance_events`;
-   - `edge-app` persiste em `attendance_events` com `sync_status = pending`.
-8. Em falha, sem rosto, aluno desconhecido ou aluno fora da lesson:
+7. Em sucesso autorizado, o `face-worker` enfileira evento em `queue:attendance_events`.
+8. O `edge-app` persiste ou recupera a presenca existente em `attendance_events`.
+9. Depois da persistencia, o `edge-app` publica `cmd/{device_id}` com `auth: true` e uma mensagem com nome do aluno e horario da primeira presenca.
+10. Em falha, sem rosto, aluno desconhecido ou aluno fora da lesson:
    - nao publica MQTT;
    - apenas registra log.
 
@@ -148,10 +146,10 @@ sequenceDiagram
   W->>R: ler lesson:{lessonId}:students e face:embeddings
   W->>W: detectar rosto e comparar embeddings elegiveis
   alt aluno reconhecido e matriculado
-    W->>MQ: publish cmd/{device_id} auth=true
     W->>R: RPUSH queue:attendance_events
     API->>R: BLPOP queue:attendance_events
-    API->>DB: INSERT attendance_events pending
+    API->>DB: INSERT OR IGNORE attendance_events pending
+    API->>MQ: publish cmd/{device_id} auth=true msg=nome+horario
   else falha ou aluno nao elegivel
     W-->>W: log sem MQTT
   end

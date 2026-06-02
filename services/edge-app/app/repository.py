@@ -47,15 +47,6 @@ def get_current_lesson_for_device(device_id: str) -> Lesson | None:
 
     ordered = sorted(rows, key=lambda row: parse_dt(row["starts_at"]))
     for row in ordered:
-        # TODO: remove this temp part
-        return Lesson(
-            id=row["id"],
-            name=row["name"],
-            locale_id=row["locale_id"],
-            starts_at=parse_dt(row["starts_at"]),
-            ends_at=parse_dt(row["ends_at"]),
-        )
-        # temp end
         starts_at = parse_dt(row["starts_at"])
         ends_at = parse_dt(row["ends_at"])
         if starts_at <= now < ends_at:
@@ -90,17 +81,6 @@ def compute_context_for_device(device_id: str) -> DeviceContext:
     upcoming = None
     ordered = sorted(rows, key=lambda row: parse_dt(row["starts_at"]))
     for row in ordered:
-
-        # TODO: remove this temp part
-        return DeviceContext(
-            lesson_name=row["name"],
-            ms_remaining=300000,
-            ms_for_next=0,
-            lesson_id=row["id"],
-            locale_id=locale_id,
-        )
-        # temp end
-
         starts_at = parse_dt(row["starts_at"])
         ends_at = parse_dt(row["ends_at"])
         if starts_at <= now_dt < ends_at:
@@ -129,23 +109,12 @@ def compute_context_for_device(device_id: str) -> DeviceContext:
     )
 
 
-def save_attendance_event(event: dict) -> str:
+def save_attendance_event(event: dict) -> dict:
     event_id = event.get("eventId") or str(uuid.uuid4())
     with transaction() as conn:
-        existing = conn.execute(
+        cursor = conn.execute(
             """
-            SELECT id
-            FROM attendance_events
-            WHERE student_id = ? AND lesson_id = ?
-            """,
-            (event["studentId"], event["lessonId"]),
-        ).fetchone()
-        if existing:
-            return existing["id"]
-
-        conn.execute(
-            """
-            INSERT INTO attendance_events
+            INSERT OR IGNORE INTO attendance_events
             (id, student_id, lesson_id, device_id, recognized_at, score, sync_status)
             VALUES (?, ?, ?, ?, ?, ?, 'pending')
             """,
@@ -158,7 +127,38 @@ def save_attendance_event(event: dict) -> str:
                 float(event["score"]),
             ),
         )
-    return event_id
+        is_new = cursor.rowcount == 1
+        row = conn.execute(
+            """
+            SELECT
+              attendance_events.id,
+              attendance_events.student_id,
+              attendance_events.lesson_id,
+              attendance_events.device_id,
+              attendance_events.recognized_at,
+              attendance_events.score,
+              COALESCE(students.name, attendance_events.student_id) AS student_name
+            FROM attendance_events
+            LEFT JOIN students ON students.id = attendance_events.student_id
+            WHERE attendance_events.student_id = ?
+              AND attendance_events.lesson_id = ?
+            """,
+            (event["studentId"], event["lessonId"]),
+        ).fetchone()
+
+    if row is None:
+        raise RuntimeError("attendance event was not stored")
+
+    return {
+        "id": row["id"],
+        "student_id": row["student_id"],
+        "student_name": row["student_name"],
+        "lesson_id": row["lesson_id"],
+        "device_id": row["device_id"],
+        "recognized_at": row["recognized_at"],
+        "score": row["score"],
+        "is_new": is_new,
+    }
 
 
 def rebuild_runtime_cache() -> None:

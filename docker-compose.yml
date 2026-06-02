@@ -45,19 +45,19 @@ services:
       ZONE_INFO: "${ZONE_INFO:-America/Fortaleza}"
       MAX_FRAME_QUEUE: "${MAX_FRAME_QUEUE:-100}"
       LOG_LEVEL: "${LOG_LEVEL:-INFO}"
-      SQLITE_PATH: "/data/edge.db"
+      SQLITE_PATH: "/data/bd.db"
       NODE_ID: "${NODE_ID:-edge-node}"
       MAIN_API_URL: "${MAIN_API_URL:-}"
       MAIN_API_TOKEN: "${MAIN_API_TOKEN:-}"
       SYNC_INTERVAL_SECONDS: "${SYNC_INTERVAL_SECONDS:-60}"
     volumes:
-      - ${EDGE_DATA_DIR:-./data/edge}:/data
+      - ${EDGE_DATA_DIR:-./data/bd}:/data
     depends_on:
       - redis
       - mosquitto
     networks:
       - edge-net
-      
+
   face-worker:
     build:
       context: .
@@ -67,24 +67,15 @@ services:
     environment:
       REDIS_PORT: "6379"
       REDIS_HOST: "redis"
-      MQTT_PORT: "1883"
-      MQTT_HOST: "mosquitto"
-      MQTT_USER: "service"
-      MQTT_PASS: "${MQTT_PASS_SERVICE:-replace}"
       DETECT_MODEL_PATH: "/models/face_detection_yunet.onnx"
       RECOG_MODEL_PATH: "/models/face_recognition_sface.onnx"
-      FACE_SCORE_THRESHOLD: "${FACE_SCORE_THRESHOLD:-0.85}"
+      FACE_SCORE_THRESHOLD: "${FACE_SCORE_THRESHOLD:-0.8}"
       FACE_MATCH_THRESHOLD: "${FACE_MATCH_THRESHOLD:-0.363}"
-      DEBUG_SAVE_FRAMES: "${DEBUG_SAVE_FRAMES:-false}"
-      DEBUG_FRAMES_DIR: "/debug/frames"
-      DEBUG_MAX_FRAMES: "${DEBUG_MAX_FRAMES:-10}"
       LOG_LEVEL: "${LOG_LEVEL:-INFO}"
     volumes:
       - ./data/models:/models:ro
-      - ./data/debug/frames:/debug/frames
     depends_on:
       - redis
-      - mosquitto
     networks:
       - edge-net
 

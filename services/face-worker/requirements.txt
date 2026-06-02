@@ -1,5 +1,4 @@
 redis
-paho-mqtt
 msgpack
 numpy
 opencv-python-headless
