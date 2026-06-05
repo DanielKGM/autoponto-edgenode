@@ -28,37 +28,48 @@ def get_locale_id_for_device(device_id: str) -> str | None:
         return row["locale_id"] if row else None
 
 
+def _lesson_from_row(row) -> Lesson:
+    return Lesson(
+        id=row["id"],
+        name=row["name"],
+        locale_id=row["locale_id"],
+        starts_at=parse_dt(row["starts_at"]),
+        ends_at=parse_dt(row["ends_at"]),
+    )
+
+
+def _lessons_for_locale(locale_id: str) -> list[Lesson]:
+    with connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT id, name, locale_id, starts_at, ends_at
+            FROM lessons WHERE locale_id = ?
+            """,
+            (locale_id,),
+        ).fetchall()
+    lessons = [_lesson_from_row(row) for row in rows]
+    return sorted(lessons, key=lambda lesson: lesson.starts_at)
+
+
+def _current_and_next_lesson(
+    locale_id: str, now: datetime
+) -> tuple[Lesson | None, Lesson | None]:
+    next_lesson = None
+    for lesson in _lessons_for_locale(locale_id):
+        if lesson.starts_at <= now < lesson.ends_at:
+            return lesson, None
+        if now < lesson.starts_at and next_lesson is None:
+            next_lesson = lesson
+    return None, next_lesson
+
+
 def get_current_lesson_for_device(device_id: str) -> Lesson | None:
     locale_id = get_locale_id_for_device(device_id)
     if not locale_id:
         return None
 
-    now = datetime.now(TZ)
-    with connect() as conn:
-        rows = conn.execute(
-            """
-            SELECT id, name, locale_id, starts_at, ends_at
-            FROM lessons
-            WHERE locale_id = ?
-            ORDER BY starts_at
-            """,
-            (locale_id,),
-        ).fetchall()
-
-    ordered = sorted(rows, key=lambda row: parse_dt(row["starts_at"]))
-    for row in ordered:
-        starts_at = parse_dt(row["starts_at"])
-        ends_at = parse_dt(row["ends_at"])
-        if starts_at <= now < ends_at:
-            return Lesson(
-                id=row["id"],
-                name=row["name"],
-                locale_id=row["locale_id"],
-                starts_at=starts_at,
-                ends_at=ends_at,
-            )
-
-    return None
+    current, _ = _current_and_next_lesson(locale_id, datetime.now(TZ))
+    return current
 
 
 def compute_context_for_device(device_id: str) -> DeviceContext:
@@ -66,41 +77,22 @@ def compute_context_for_device(device_id: str) -> DeviceContext:
     if not locale_id:
         return DeviceContext(lesson_name="", ms_remaining=0, ms_for_next=0)
 
-    now_dt = datetime.now(TZ)
-    with connect() as conn:
-        rows = conn.execute(
-            """
-            SELECT id, name, locale_id, starts_at, ends_at
-            FROM lessons
-            WHERE lessons.locale_id = ?
-            ORDER BY lessons.starts_at
-            """,
-            (locale_id,),
-        ).fetchall()
-
-    upcoming = None
-    ordered = sorted(rows, key=lambda row: parse_dt(row["starts_at"]))
-    for row in ordered:
-        starts_at = parse_dt(row["starts_at"])
-        ends_at = parse_dt(row["ends_at"])
-        if starts_at <= now_dt < ends_at:
-            return DeviceContext(
-                lesson_name=row["name"],
-                ms_remaining=max(int((ends_at - now_dt).total_seconds() * 1000), 0),
-                ms_for_next=0,
-                lesson_id=row["id"],
-                locale_id=locale_id,
-            )
-        if now_dt < starts_at and upcoming is None:
-            upcoming = (row, starts_at)
-
-    if upcoming:
-        row, starts_at = upcoming
+    now = datetime.now(TZ)
+    current, next_lesson = _current_and_next_lesson(locale_id, now)
+    if current:
         return DeviceContext(
-            lesson_name=row["name"],
+            lesson_name=current.name,
+            ms_remaining=max(int((current.ends_at - now).total_seconds() * 1000), 0),
+            ms_for_next=0,
+            lesson_id=current.id,
+            locale_id=locale_id,
+        )
+    if next_lesson:
+        return DeviceContext(
+            lesson_name=next_lesson.name,
             ms_remaining=0,
-            ms_for_next=max(int((starts_at - now_dt).total_seconds() * 1000), 0),
-            lesson_id=row["id"],
+            ms_for_next=max(int((next_lesson.starts_at - now).total_seconds() * 1000), 0),
+            lesson_id=next_lesson.id,
             locale_id=locale_id,
         )
 

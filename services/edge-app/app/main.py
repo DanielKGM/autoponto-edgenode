@@ -7,7 +7,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from app.attendance_consumer import consume_attendance_events
 from app.config import EDGE_SHARED_AUTH, LOG_LEVEL
 from app.db import init_db
-from app.mqtt_listener import build_status_listener
+from app.mqtt import build_status_listener
 from app.redis_store import enqueue_frame, is_frame_queue_full
 from app.repository import (
     compute_context_for_device,

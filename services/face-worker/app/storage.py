@@ -51,16 +51,6 @@ class Storage:
         logger.info("loaded %d eligible embeddings for lesson=%s", len(result), lesson_id)
         return result
 
-    def save_embedding(self, student_id: str, embedding: np.ndarray, embedding_id: str | None = None):
-        payload = msgpack.packb(
-            {
-                "studentId": student_id,
-                "embedding": self._encode_embedding(embedding),
-            },
-            use_bin_type=True,
-        )
-        self.redis.hset(EMBEDDINGS_KEY, embedding_id or student_id, payload)
-
     def enqueue_attendance_event(
         self,
         device_id: str,
@@ -87,14 +77,3 @@ class Storage:
     def _decode_embedding_record(self, blob: bytes) -> tuple[str, np.ndarray]:
         payload = msgpack.unpackb(blob, raw=False)
         return payload["studentId"], self._decode_embedding(payload["embedding"])
-
-    def _encode_embedding(self, embedding: np.ndarray) -> bytes:
-        embedding = np.asarray(embedding, dtype=np.float32)
-        return msgpack.packb(
-            {
-                "dtype": "float32",
-                "shape": list(embedding.shape),
-                "data": embedding.tobytes(),
-            },
-            use_bin_type=True,
-        )

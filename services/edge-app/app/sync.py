@@ -42,47 +42,90 @@ def _upsert_many(conn, table: str, rows: list[dict], columns: list[str]) -> None
     conn.executemany(sql, [tuple(row[col] for col in columns) for row in rows])
 
 
+def _device_row(item: dict) -> dict:
+    return {
+        "id": item["id"],
+        "locale_id": item["locale_id"],
+        "active": int(item.get("active", True)),
+    }
+
+
+def _lesson_row(item: dict) -> dict:
+    return {
+        "id": item["id"],
+        "name": item["name"],
+        "locale_id": item["locale_id"],
+        "starts_at": item["starts_at"],
+        "ends_at": item["ends_at"],
+    }
+
+
+def _student_row(item: dict) -> dict:
+    return {
+        "id": item["id"],
+        "registration": item.get("registration") or item["id"],
+        "name": item["name"],
+        "active": int(item.get("active", True)),
+    }
+
+
+def _delete_by_ids(conn, table: str, ids: list[str]) -> None:
+    if not ids:
+        return
+    conn.executemany(
+        f"DELETE FROM {table} WHERE id = ?",
+        [(item_id,) for item_id in ids],
+    )
+
+
+def _apply_deletions(conn, deleted: dict) -> None:
+    for item in deleted.get("enrollments", []):
+        conn.execute(
+            "DELETE FROM enrollments WHERE lesson_id = ? AND student_id = ?",
+            (item["lesson_id"], item["student_id"]),
+        )
+
+    for table in ("face_embeddings", "lessons", "devices", "students", "locales"):
+        _delete_by_ids(conn, table, deleted.get(table, []))
+
+
+def _save_cursors(conn, cursors: dict) -> None:
+    for entity, cursor in cursors.items():
+        conn.execute(
+            """
+            INSERT INTO sync_state (entity, cursor)
+            VALUES (?, ?)
+            ON CONFLICT(entity) DO UPDATE SET cursor = excluded.cursor
+            """,
+            (entity, str(cursor)),
+        )
+
+
 def apply_pull_payload(payload: dict) -> None:
     data = payload.get("data", payload)
     deleted = payload.get("deleted", {})
-    devices = [
-        {
-            "id": item["id"],
-            "locale_id": item["locale_id"],
-            "active": int(item.get("active", True)),
-        }
-        for item in data.get("devices", [])
-    ]
-    lessons = [
-        {
-            "id": item["id"],
-            "name": item["name"],
-            "locale_id": item["locale_id"],
-            "starts_at": item["starts_at"],
-            "ends_at": item["ends_at"],
-        }
-        for item in data.get("lessons", [])
-    ]
-    students = [
-        {
-            "id": item["id"],
-            "registration": item.get("registration") or item["id"],
-            "name": item["name"],
-            "active": int(item.get("active", True)),
-        }
-        for item in data.get("students", [])
-    ]
+    upserts = (
+        ("locales", data.get("locales", []), ["id", "name"]),
+        (
+            "devices",
+            [_device_row(item) for item in data.get("devices", [])],
+            ["id", "locale_id", "active"],
+        ),
+        (
+            "lessons",
+            [_lesson_row(item) for item in data.get("lessons", [])],
+            ["id", "name", "locale_id", "starts_at", "ends_at"],
+        ),
+        (
+            "students",
+            [_student_row(item) for item in data.get("students", [])],
+            ["id", "registration", "name", "active"],
+        ),
+    )
 
     with transaction() as conn:
-        _upsert_many(conn, "locales", data.get("locales", []), ["id", "name"])
-        _upsert_many(conn, "devices", devices, ["id", "locale_id", "active"])
-        _upsert_many(
-            conn,
-            "lessons",
-            lessons,
-            ["id", "name", "locale_id", "starts_at", "ends_at"],
-        )
-        _upsert_many(conn, "students", students, ["id", "registration", "name", "active"])
+        for table, rows, columns in upserts:
+            _upsert_many(conn, table, rows, columns)
 
         for item in data.get("enrollments", []):
             conn.execute(
@@ -106,31 +149,8 @@ def apply_pull_payload(payload: dict) -> None:
                 ),
             )
 
-        for item in deleted.get("enrollments", []):
-            conn.execute(
-                "DELETE FROM enrollments WHERE lesson_id = ? AND student_id = ?",
-                (item["lesson_id"], item["student_id"]),
-            )
-        for item_id in deleted.get("face_embeddings", []):
-            conn.execute("DELETE FROM face_embeddings WHERE id = ?", (item_id,))
-        for item_id in deleted.get("lessons", []):
-            conn.execute("DELETE FROM lessons WHERE id = ?", (item_id,))
-        for item_id in deleted.get("devices", []):
-            conn.execute("DELETE FROM devices WHERE id = ?", (item_id,))
-        for item_id in deleted.get("students", []):
-            conn.execute("DELETE FROM students WHERE id = ?", (item_id,))
-        for item_id in deleted.get("locales", []):
-            conn.execute("DELETE FROM locales WHERE id = ?", (item_id,))
-
-        for entity, cursor in payload.get("cursors", {}).items():
-            conn.execute(
-                """
-                INSERT INTO sync_state (entity, cursor)
-                VALUES (?, ?)
-                ON CONFLICT(entity) DO UPDATE SET cursor = excluded.cursor
-                """,
-                (entity, str(cursor)),
-            )
+        _apply_deletions(conn, deleted)
+        _save_cursors(conn, payload.get("cursors", {}))
 
     rebuild_runtime_cache()
 
@@ -175,7 +195,10 @@ async def sync_once() -> None:
         pull = await client.get(
             f"{MAIN_API_URL}/edge/pull",
             headers=_headers(),
-            params={"node_id": NODE_ID, "cursors": msgpack.packb(_current_cursors()).hex()},
+            params={
+                "node_id": NODE_ID,
+                "cursors": msgpack.packb(_current_cursors()).hex(),
+            },
         )
         pull.raise_for_status()
         apply_pull_payload(pull.json())
@@ -188,7 +211,10 @@ async def sync_once() -> None:
                 json={"node_id": NODE_ID, "events": pending},
             )
             push.raise_for_status()
-            synced_ids = push.json().get("synced_ids", [event["id"] for event in pending])
+            synced_ids = push.json().get(
+                "synced_ids",
+                [event["id"] for event in pending],
+            )
             _mark_synced(synced_ids)
 
 

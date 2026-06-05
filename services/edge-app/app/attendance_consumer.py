@@ -3,7 +3,7 @@ import logging
 
 import msgpack
 
-from app.mqtt_listener import publish_command
+from app.mqtt import publish_command
 from app.redis_store import QUEUE_ATTENDANCE_EVENTS, get_redis
 from app.repository import parse_dt, save_attendance_event
 
