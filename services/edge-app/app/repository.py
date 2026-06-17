@@ -10,6 +10,7 @@ from app.models import DeviceContext, Lesson
 from app.redis_store import replace_runtime_cache
 
 TZ = ZoneInfo(ZONE_INFO)
+INACTIVE_LESSON_STATUSES = ("FECHADA", "CANCELADA")
 
 
 def parse_dt(value: str) -> datetime:
@@ -35,6 +36,7 @@ def _lesson_from_row(row) -> Lesson:
         locale_id=row["locale_id"],
         starts_at=parse_dt(row["starts_at"]),
         ends_at=parse_dt(row["ends_at"]),
+        status=row["status"],
     )
 
 
@@ -42,10 +44,12 @@ def _lessons_for_locale(locale_id: str) -> list[Lesson]:
     with connect() as conn:
         rows = conn.execute(
             """
-            SELECT id, name, locale_id, starts_at, ends_at
-            FROM lessons WHERE locale_id = ?
+            SELECT id, name, locale_id, starts_at, ends_at, status
+            FROM lessons
+            WHERE locale_id = ?
+              AND (status IS NULL OR status NOT IN (?, ?))
             """,
-            (locale_id,),
+            (locale_id, *INACTIVE_LESSON_STATUSES),
         ).fetchall()
     lessons = [_lesson_from_row(row) for row in rows]
     return sorted(lessons, key=lambda lesson: lesson.starts_at)

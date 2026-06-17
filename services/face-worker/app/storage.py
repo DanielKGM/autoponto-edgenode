@@ -23,13 +23,21 @@ class Storage:
             host=REDIS_HOST,
             port=REDIS_PORT,
             decode_responses=False,
+            socket_connect_timeout=5,
+            socket_timeout=10,
+            health_check_interval=30,
         )
 
     def pop_frame_blocking(self) -> dict:
-        _, item_raw = self.redis.blpop(QUEUE_KEY, timeout=0)
+        item = self.redis.blpop(QUEUE_KEY, timeout=5)
+        if item is None:
+            return None
+        _, item_raw = item
         return msgpack.unpackb(item_raw, raw=False)
 
-    def load_embeddings_for_lesson(self, lesson_id: str) -> list[tuple[str, str, np.ndarray]]:
+    def load_embeddings_for_lesson(
+        self, lesson_id: str
+    ) -> list[tuple[str, str, np.ndarray]]:
         student_ids = self.redis.smembers(f"lesson:{lesson_id}:students")
         if not student_ids:
             logger.info("no eligible students for lesson=%s", lesson_id)
@@ -48,7 +56,9 @@ class Storage:
             if student_id in eligible:
                 result.append((embedding_id, student_id, embedding))
 
-        logger.info("loaded %d eligible embeddings for lesson=%s", len(result), lesson_id)
+        logger.info(
+            "loaded %d eligible embeddings for lesson=%s", len(result), lesson_id
+        )
         return result
 
     def enqueue_attendance_event(
@@ -66,13 +76,19 @@ class Storage:
             "score": score,
             "recognizedAt": datetime.now(timezone.utc).isoformat(),
         }
-        self.redis.rpush(ATTENDANCE_QUEUE_KEY, msgpack.packb(payload, use_bin_type=True))
+        self.redis.rpush(
+            ATTENDANCE_QUEUE_KEY, msgpack.packb(payload, use_bin_type=True)
+        )
 
     def _decode_embedding(self, blob: bytes) -> np.ndarray:
         payload = msgpack.unpackb(blob, raw=False)
         if isinstance(payload.get("data"), list):
-            return np.asarray(payload["data"], dtype=np.float32).reshape(payload["shape"])
-        return np.frombuffer(payload["data"], dtype=np.float32).reshape(payload["shape"])
+            return np.asarray(payload["data"], dtype=np.float32).reshape(
+                payload["shape"]
+            )
+        return np.frombuffer(payload["data"], dtype=np.float32).reshape(
+            payload["shape"]
+        )
 
     def _decode_embedding_record(self, blob: bytes) -> tuple[str, np.ndarray]:
         payload = msgpack.unpackb(blob, raw=False)

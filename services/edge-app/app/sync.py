@@ -6,6 +6,7 @@ import msgpack
 
 from app.config import MAIN_API_TOKEN, MAIN_API_URL, NODE_ID, SYNC_INTERVAL_SECONDS
 from app.db import connect, transaction
+from app.redis_store import iter_device_statuses
 from app.repository import rebuild_runtime_cache
 
 logger = logging.getLogger(__name__)
@@ -14,7 +15,7 @@ logger = logging.getLogger(__name__)
 def _headers() -> dict[str, str]:
     headers = {"X-Node-Id": NODE_ID}
     if MAIN_API_TOKEN:
-        headers["Authorization"] = f"Bearer {MAIN_API_TOKEN}"
+        headers["Authorization"] = f"NodeToken {MAIN_API_TOKEN}"
     return headers
 
 
@@ -47,6 +48,7 @@ def _device_row(item: dict) -> dict:
         "id": item["id"],
         "locale_id": item["locale_id"],
         "active": int(item.get("active", True)),
+        "status": item.get("status"),
     }
 
 
@@ -57,6 +59,7 @@ def _lesson_row(item: dict) -> dict:
         "locale_id": item["locale_id"],
         "starts_at": item["starts_at"],
         "ends_at": item["ends_at"],
+        "status": item.get("status"),
     }
 
 
@@ -109,12 +112,12 @@ def apply_pull_payload(payload: dict) -> None:
         (
             "devices",
             [_device_row(item) for item in data.get("devices", [])],
-            ["id", "locale_id", "active"],
+            ["id", "locale_id", "active", "status"],
         ),
         (
             "lessons",
             [_lesson_row(item) for item in data.get("lessons", [])],
-            ["id", "name", "locale_id", "starts_at", "ends_at"],
+            ["id", "name", "locale_id", "starts_at", "ends_at", "status"],
         ),
         (
             "students",
@@ -185,6 +188,19 @@ def _mark_synced(ids: list[str]) -> None:
         )
 
 
+async def _push_device_statuses(client) -> None:
+    statuses = iter_device_statuses()
+    if not statuses:
+        return
+
+    response = await client.post(
+        f"{MAIN_API_URL}/edge/devices/status",
+        headers=_headers(),
+        json={"node_id": NODE_ID, "devices": statuses},
+    )
+    response.raise_for_status()
+
+
 async def sync_once() -> None:
     if not MAIN_API_URL:
         return
@@ -202,6 +218,8 @@ async def sync_once() -> None:
         )
         pull.raise_for_status()
         apply_pull_payload(pull.json())
+
+        await _push_device_statuses(client)
 
         pending = _pending_attendance()
         if pending:

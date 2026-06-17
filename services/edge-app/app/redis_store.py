@@ -9,6 +9,8 @@ from app.models import FrameQueueItem
 QUEUE_FRAMES = "queue:frames"
 QUEUE_ATTENDANCE_EVENTS = "queue:attendance_events"
 FACE_EMBEDDINGS = "face:embeddings"
+DEVICE_STATUS_PREFIX = "device:"
+DEVICE_STATUS_SUFFIX = ":status"
 
 
 def get_redis(decode_responses: bool = False) -> redis.Redis:
@@ -49,12 +51,42 @@ def save_device_status(device_id: str, state: str) -> None:
     now = datetime.now(timezone.utc).isoformat()
     data = {
         "deviceId": device_id,
-        "state": state,
+        "state": state.strip().lower(),
         "receivedAt": now,
     }
     client = get_redis(decode_responses=True)
-    client.set(f"device:{device_id}:status", json.dumps(data))
+    client.set(
+        f"{DEVICE_STATUS_PREFIX}{device_id}{DEVICE_STATUS_SUFFIX}",
+        json.dumps(data),
+    )
     client.hset("devices:last_seen", device_id, now)
+
+
+def iter_device_statuses() -> list[dict]:
+    statuses = []
+    client = get_redis(decode_responses=True)
+    for key in client.scan_iter(f"{DEVICE_STATUS_PREFIX}*{DEVICE_STATUS_SUFFIX}"):
+        raw = client.get(key)
+        if not raw:
+            continue
+        try:
+            data = json.loads(raw)
+        except json.JSONDecodeError:
+            continue
+
+        device_id = data.get("deviceId")
+        status = data.get("state")
+        reported_at = data.get("receivedAt")
+        if device_id and status and reported_at:
+            statuses.append(
+                {
+                    "device_id": device_id,
+                    "status": status,
+                    "reported_at": reported_at,
+                }
+            )
+
+    return statuses
 
 
 def replace_runtime_cache(lesson_students: dict[str, list[str]], embeddings: dict[str, bytes]) -> None:

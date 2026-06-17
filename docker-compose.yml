@@ -45,7 +45,7 @@ services:
       ZONE_INFO: "${ZONE_INFO:-America/Fortaleza}"
       MAX_FRAME_QUEUE: "${MAX_FRAME_QUEUE:-100}"
       LOG_LEVEL: "${LOG_LEVEL:-INFO}"
-      SQLITE_PATH: "/data/db.db"
+      SQLITE_PATH: "/data/db.sql"
       NODE_ID: "${NODE_ID:-edge-node}"
       MAIN_API_URL: "${MAIN_API_URL:-}"
       MAIN_API_TOKEN: "${MAIN_API_TOKEN:-}"

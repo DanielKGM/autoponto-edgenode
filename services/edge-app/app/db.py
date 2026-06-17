@@ -18,6 +18,7 @@ CREATE TABLE IF NOT EXISTS devices (
   id TEXT PRIMARY KEY,
   locale_id TEXT NOT NULL,
   active INTEGER NOT NULL DEFAULT 1,
+  status TEXT,
   FOREIGN KEY (locale_id) REFERENCES locales(id)
 );
 
@@ -27,6 +28,7 @@ CREATE TABLE IF NOT EXISTS lessons (
   locale_id TEXT NOT NULL,
   starts_at TEXT NOT NULL,
   ends_at TEXT NOT NULL,
+  status TEXT,
   FOREIGN KEY (locale_id) REFERENCES locales(id)
 );
 
@@ -76,10 +78,26 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_attendance_student_lesson
 """
 
 
+def _ensure_column(
+    conn: sqlite3.Connection,
+    table: str,
+    column: str,
+    definition: str,
+) -> None:
+    columns = {
+        row["name"]
+        for row in conn.execute(f"PRAGMA table_info({table})").fetchall()
+    }
+    if column not in columns:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+
+
 def init_db() -> None:
     SQLITE_PATH.parent.mkdir(parents=True, exist_ok=True)
     with connect() as conn:
         conn.executescript(SCHEMA)
+        _ensure_column(conn, "devices", "status", "TEXT")
+        _ensure_column(conn, "lessons", "status", "TEXT")
 
 
 def connect() -> sqlite3.Connection:
