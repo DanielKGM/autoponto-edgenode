@@ -2,51 +2,51 @@ from datetime import datetime
 from pydantic import BaseModel, Field
 
 
-class Locale(BaseModel):
+class Sala(BaseModel):
     id: str
-    name: str
+    nome: str
 
 
-class Device(BaseModel):
+class Dispositivo(BaseModel):
     id: str
-    locale_id: str
-    active: bool = True
+    sala_id: str
+    ativo: bool = True
     status: str | None = None
 
 
-class Lesson(BaseModel):
+class Aula(BaseModel):
     id: str
-    name: str
-    locale_id: str
-    starts_at: datetime
-    ends_at: datetime
+    nome: str
+    sala_id: str
+    inicio: datetime
+    fim: datetime
     status: str | None = None
 
 
-class Student(BaseModel):
+class Aluno(BaseModel):
     id: str
-    registration: str
-    name: str
-    active: bool = True
+    matricula: str
+    nome: str
+    ativo: bool = True
 
 
-class Enrollment(BaseModel):
-    lesson_id: str
-    student_id: str
+class MatriculaAula(BaseModel):
+    aula_id: str
+    aluno_id: str
 
 
-class FaceEmbedding(BaseModel):
+class EmbeddingFacial(BaseModel):
     id: str
-    student_id: str
-    embedding: bytes
+    aluno_id: str
+    vetor: bytes
 
 
-class AttendanceEvent(BaseModel):
+class EventoPresenca(BaseModel):
     id: str
-    student_id: str
-    lesson_id: str
-    device_id: str
-    recognized_at: datetime
+    aluno_id: str
+    aula_id: str
+    dispositivo_id: str
+    reconhecido_em: datetime
     score: float
     sync_status: str = "pending"
 
@@ -57,32 +57,32 @@ class SyncState(BaseModel):
 
 
 class DeviceContext(BaseModel):
-    lesson_name: str
+    aula_nome: str
     ms_remaining: int
     ms_for_next: int
-    lesson_id: str | None = None
-    locale_id: str | None = None
+    aula_id: str | None = None
+    sala_id: str | None = None
 
     def to_payload(self) -> dict:
         return {
-            "lesson_name": self.lesson_name,
+            "lesson_name": self.aula_nome,
             "msRemaining": self.ms_remaining,
             "msForNext": self.ms_for_next,
         }
 
 
 class FrameQueueItem(BaseModel):
-    device_id: str
-    locale_id: str
-    lesson_id: str
+    dispositivo_id: str
+    sala_id: str
+    aula_id: str
     received_at: datetime
     frame: bytes
 
     def to_queue_payload(self) -> dict:
         return {
-            "deviceId": self.device_id,
-            "localeId": self.locale_id,
-            "lessonId": self.lesson_id,
+            "dispositivoId": self.dispositivo_id,
+            "salaId": self.sala_id,
+            "aulaId": self.aula_id,
             "receivedAt": self.received_at.isoformat(),
             "frame": self.frame,
         }
@@ -90,29 +90,29 @@ class FrameQueueItem(BaseModel):
 
 class AttendanceQueueEvent(BaseModel):
     event_id: str
-    device_id: str
-    lesson_id: str
-    student_id: str
+    dispositivo_id: str
+    aula_id: str
+    aluno_id: str
     score: float
     recognized_at: datetime
 
 
 class SyncDeletedPayload(BaseModel):
-    locales: list[str] = Field(default_factory=list)
-    devices: list[str] = Field(default_factory=list)
-    lessons: list[str] = Field(default_factory=list)
-    students: list[str] = Field(default_factory=list)
-    enrollments: list[Enrollment] = Field(default_factory=list)
-    face_embeddings: list[str] = Field(default_factory=list)
+    salas: list[str] = Field(default_factory=list)
+    dispositivos: list[str] = Field(default_factory=list)
+    aulas: list[str] = Field(default_factory=list)
+    alunos: list[str] = Field(default_factory=list)
+    matriculas_aula: list[MatriculaAula] = Field(default_factory=list)
+    embeddings_faciais: list[str] = Field(default_factory=list)
 
 
 class SyncPullData(BaseModel):
-    locales: list[Locale] = Field(default_factory=list)
-    devices: list[Device] = Field(default_factory=list)
-    lessons: list[Lesson] = Field(default_factory=list)
-    students: list[Student] = Field(default_factory=list)
-    enrollments: list[Enrollment] = Field(default_factory=list)
-    face_embeddings: list[FaceEmbedding] = Field(default_factory=list)
+    salas: list[Sala] = Field(default_factory=list)
+    dispositivos: list[Dispositivo] = Field(default_factory=list)
+    aulas: list[Aula] = Field(default_factory=list)
+    alunos: list[Aluno] = Field(default_factory=list)
+    matriculas_aula: list[MatriculaAula] = Field(default_factory=list)
+    embeddings_faciais: list[EmbeddingFacial] = Field(default_factory=list)
 
 
 class SyncPullPayload(BaseModel):

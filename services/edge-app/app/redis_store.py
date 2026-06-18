@@ -7,10 +7,10 @@ from app.config import MAX_FRAME_QUEUE, REDIS_HOST, REDIS_PORT
 from app.models import FrameQueueItem
 
 QUEUE_FRAMES = "queue:frames"
-QUEUE_ATTENDANCE_EVENTS = "queue:attendance_events"
+QUEUE_ATTENDANCE_EVENTS = "queue:eventos_presenca"
 FACE_EMBEDDINGS = "face:embeddings"
-DEVICE_STATUS_PREFIX = "device:"
-DEVICE_STATUS_SUFFIX = ":status"
+DISPOSITIVO_STATUS_PREFIX = "dispositivo:"
+DISPOSITIVO_STATUS_SUFFIX = ":status"
 
 
 def get_redis(decode_responses: bool = False) -> redis.Redis:
@@ -30,15 +30,15 @@ def is_frame_queue_full() -> bool:
 
 
 def enqueue_frame(
-    device_id: str,
-    locale_id: str,
-    lesson_id: str,
+    dispositivo_id: str,
+    sala_id: str,
+    aula_id: str,
     frame_bytes: bytes,
 ) -> int:
     item = FrameQueueItem(
-        device_id=device_id,
-        locale_id=locale_id,
-        lesson_id=lesson_id,
+        dispositivo_id=dispositivo_id,
+        sala_id=sala_id,
+        aula_id=aula_id,
         received_at=datetime.now(timezone.utc),
         frame=frame_bytes,
     )
@@ -47,25 +47,27 @@ def enqueue_frame(
     return queue_length()
 
 
-def save_device_status(device_id: str, state: str) -> None:
+def save_device_status(dispositivo_id: str, state: str) -> None:
     now = datetime.now(timezone.utc).isoformat()
     data = {
-        "deviceId": device_id,
-        "state": state.strip().lower(),
-        "receivedAt": now,
+        "dispositivoId": dispositivo_id,
+        "status": state.strip().lower(),
+        "reportadoEm": now,
     }
     client = get_redis(decode_responses=True)
     client.set(
-        f"{DEVICE_STATUS_PREFIX}{device_id}{DEVICE_STATUS_SUFFIX}",
+        f"{DISPOSITIVO_STATUS_PREFIX}{dispositivo_id}{DISPOSITIVO_STATUS_SUFFIX}",
         json.dumps(data),
     )
-    client.hset("devices:last_seen", device_id, now)
+    client.hset("dispositivos:last_seen", dispositivo_id, now)
 
 
 def iter_device_statuses() -> list[dict]:
     statuses = []
     client = get_redis(decode_responses=True)
-    for key in client.scan_iter(f"{DEVICE_STATUS_PREFIX}*{DEVICE_STATUS_SUFFIX}"):
+    for key in client.scan_iter(
+        f"{DISPOSITIVO_STATUS_PREFIX}*{DISPOSITIVO_STATUS_SUFFIX}"
+    ):
         raw = client.get(key)
         if not raw:
             continue
@@ -74,32 +76,32 @@ def iter_device_statuses() -> list[dict]:
         except json.JSONDecodeError:
             continue
 
-        device_id = data.get("deviceId")
-        status = data.get("state")
-        reported_at = data.get("receivedAt")
-        if device_id and status and reported_at:
+        dispositivo_id = data.get("dispositivoId")
+        status = data.get("status")
+        reportado_em = data.get("reportadoEm")
+        if dispositivo_id and status and reportado_em:
             statuses.append(
                 {
-                    "device_id": device_id,
+                    "dispositivo_id": dispositivo_id,
                     "status": status,
-                    "reported_at": reported_at,
+                    "reportado_em": reportado_em,
                 }
             )
 
     return statuses
 
 
-def replace_runtime_cache(lesson_students: dict[str, list[str]], embeddings: dict[str, bytes]) -> None:
+def replace_runtime_cache(aula_alunos: dict[str, list[str]], embeddings: dict[str, bytes]) -> None:
     client = get_redis()
     pipe = client.pipeline()
-    for key in client.scan_iter("lesson:*:students"):
+    for key in client.scan_iter("aula:*:alunos"):
         pipe.delete(key)
     pipe.delete(FACE_EMBEDDINGS)
 
-    for lesson_id, student_ids in lesson_students.items():
-        key = f"lesson:{lesson_id}:students"
-        if student_ids:
-            pipe.sadd(key, *student_ids)
+    for aula_id, aluno_ids in aula_alunos.items():
+        key = f"aula:{aula_id}:alunos"
+        if aluno_ids:
+            pipe.sadd(key, *aluno_ids)
 
     if embeddings:
         pipe.hset(FACE_EMBEDDINGS, mapping=embeddings)

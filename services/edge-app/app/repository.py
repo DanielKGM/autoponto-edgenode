@@ -6,11 +6,11 @@ import msgpack
 
 from app.config import ZONE_INFO
 from app.db import connect, transaction
-from app.models import DeviceContext, Lesson
+from app.models import Aula, DeviceContext
 from app.redis_store import replace_runtime_cache
 
 TZ = ZoneInfo(ZONE_INFO)
-INACTIVE_LESSON_STATUSES = ("FECHADA", "CANCELADA")
+INACTIVE_AULA_STATUSES = ("FECHADA", "CANCELADA")
 
 
 def parse_dt(value: str) -> datetime:
@@ -20,89 +20,87 @@ def parse_dt(value: str) -> datetime:
     return parsed.astimezone(TZ)
 
 
-def get_locale_id_for_device(device_id: str) -> str | None:
+def get_sala_id_for_device(dispositivo_id: str) -> str | None:
     with connect() as conn:
         row = conn.execute(
-            "SELECT locale_id FROM devices WHERE id = ? AND active = 1",
-            (device_id,),
+            "SELECT sala_id FROM dispositivos WHERE id = ? AND ativo = 1",
+            (dispositivo_id,),
         ).fetchone()
-        return row["locale_id"] if row else None
+        return row["sala_id"] if row else None
 
 
-def _lesson_from_row(row) -> Lesson:
-    return Lesson(
+def _aula_from_row(row) -> Aula:
+    return Aula(
         id=row["id"],
-        name=row["name"],
-        locale_id=row["locale_id"],
-        starts_at=parse_dt(row["starts_at"]),
-        ends_at=parse_dt(row["ends_at"]),
+        nome=row["nome"],
+        sala_id=row["sala_id"],
+        inicio=parse_dt(row["inicio"]),
+        fim=parse_dt(row["fim"]),
         status=row["status"],
     )
 
 
-def _lessons_for_locale(locale_id: str) -> list[Lesson]:
+def _aulas_for_sala(sala_id: str) -> list[Aula]:
     with connect() as conn:
         rows = conn.execute(
             """
-            SELECT id, name, locale_id, starts_at, ends_at, status
-            FROM lessons
-            WHERE locale_id = ?
+            SELECT id, nome, sala_id, inicio, fim, status
+            FROM aulas
+            WHERE sala_id = ?
               AND (status IS NULL OR status NOT IN (?, ?))
             """,
-            (locale_id, *INACTIVE_LESSON_STATUSES),
+            (sala_id, *INACTIVE_AULA_STATUSES),
         ).fetchall()
-    lessons = [_lesson_from_row(row) for row in rows]
-    return sorted(lessons, key=lambda lesson: lesson.starts_at)
+    aulas = [_aula_from_row(row) for row in rows]
+    return sorted(aulas, key=lambda aula: aula.inicio)
 
 
-def _current_and_next_lesson(
-    locale_id: str, now: datetime
-) -> tuple[Lesson | None, Lesson | None]:
-    next_lesson = None
-    for lesson in _lessons_for_locale(locale_id):
-        if lesson.starts_at <= now < lesson.ends_at:
-            return lesson, None
-        if now < lesson.starts_at and next_lesson is None:
-            next_lesson = lesson
-    return None, next_lesson
+def _current_and_next_aula(
+    sala_id: str, now: datetime
+) -> tuple[Aula | None, Aula | None]:
+    next_aula = None
+    for aula in _aulas_for_sala(sala_id):
+        if aula.inicio <= now < aula.fim:
+            return aula, None
+        if now < aula.inicio and next_aula is None:
+            next_aula = aula
+    return None, next_aula
 
 
-def get_current_lesson_for_device(device_id: str) -> Lesson | None:
-    locale_id = get_locale_id_for_device(device_id)
-    if not locale_id:
+def get_current_aula_for_device(dispositivo_id: str) -> Aula | None:
+    sala_id = get_sala_id_for_device(dispositivo_id)
+    if not sala_id:
         return None
 
-    current, _ = _current_and_next_lesson(locale_id, datetime.now(TZ))
+    current, _ = _current_and_next_aula(sala_id, datetime.now(TZ))
     return current
 
 
-def compute_context_for_device(device_id: str) -> DeviceContext:
-    locale_id = get_locale_id_for_device(device_id)
-    if not locale_id:
-        return DeviceContext(lesson_name="", ms_remaining=0, ms_for_next=0)
+def compute_context_for_device(dispositivo_id: str) -> DeviceContext:
+    sala_id = get_sala_id_for_device(dispositivo_id)
+    if not sala_id:
+        return DeviceContext(aula_nome="", ms_remaining=0, ms_for_next=0)
 
     now = datetime.now(TZ)
-    current, next_lesson = _current_and_next_lesson(locale_id, now)
+    current, next_aula = _current_and_next_aula(sala_id, now)
     if current:
         return DeviceContext(
-            lesson_name=current.name,
-            ms_remaining=max(int((current.ends_at - now).total_seconds() * 1000), 0),
+            aula_nome=current.nome,
+            ms_remaining=max(int((current.fim - now).total_seconds() * 1000), 0),
             ms_for_next=0,
-            lesson_id=current.id,
-            locale_id=locale_id,
+            aula_id=current.id,
+            sala_id=sala_id,
         )
-    if next_lesson:
+    if next_aula:
         return DeviceContext(
-            lesson_name=next_lesson.name,
+            aula_nome=next_aula.nome,
             ms_remaining=0,
-            ms_for_next=max(int((next_lesson.starts_at - now).total_seconds() * 1000), 0),
-            lesson_id=next_lesson.id,
-            locale_id=locale_id,
+            ms_for_next=max(int((next_aula.inicio - now).total_seconds() * 1000), 0),
+            aula_id=next_aula.id,
+            sala_id=sala_id,
         )
 
-    return DeviceContext(
-        lesson_name="", ms_remaining=0, ms_for_next=0, locale_id=locale_id
-    )
+    return DeviceContext(aula_nome="", ms_remaining=0, ms_for_next=0, sala_id=sala_id)
 
 
 def save_attendance_event(event: dict) -> dict:
@@ -110,15 +108,15 @@ def save_attendance_event(event: dict) -> dict:
     with transaction() as conn:
         cursor = conn.execute(
             """
-            INSERT OR IGNORE INTO attendance_events
-            (id, student_id, lesson_id, device_id, recognized_at, score, sync_status)
+            INSERT OR IGNORE INTO eventos_presenca
+            (id, aluno_id, aula_id, dispositivo_id, reconhecido_em, score, sync_status)
             VALUES (?, ?, ?, ?, ?, ?, 'pending')
             """,
             (
                 event_id,
-                event["studentId"],
-                event["lessonId"],
-                event["deviceId"],
+                event["alunoId"],
+                event["aulaId"],
+                event["dispositivoId"],
                 event["recognizedAt"],
                 float(event["score"]),
             ),
@@ -127,19 +125,19 @@ def save_attendance_event(event: dict) -> dict:
         row = conn.execute(
             """
             SELECT
-              attendance_events.id,
-              attendance_events.student_id,
-              attendance_events.lesson_id,
-              attendance_events.device_id,
-              attendance_events.recognized_at,
-              attendance_events.score,
-              COALESCE(students.name, attendance_events.student_id) AS student_name
-            FROM attendance_events
-            LEFT JOIN students ON students.id = attendance_events.student_id
-            WHERE attendance_events.student_id = ?
-              AND attendance_events.lesson_id = ?
+              eventos_presenca.id,
+              eventos_presenca.aluno_id,
+              eventos_presenca.aula_id,
+              eventos_presenca.dispositivo_id,
+              eventos_presenca.reconhecido_em,
+              eventos_presenca.score,
+              COALESCE(alunos.nome, eventos_presenca.aluno_id) AS aluno_nome
+            FROM eventos_presenca
+            LEFT JOIN alunos ON alunos.id = eventos_presenca.aluno_id
+            WHERE eventos_presenca.aluno_id = ?
+              AND eventos_presenca.aula_id = ?
             """,
-            (event["studentId"], event["lessonId"]),
+            (event["alunoId"], event["aulaId"]),
         ).fetchone()
 
     if row is None:
@@ -147,11 +145,11 @@ def save_attendance_event(event: dict) -> dict:
 
     return {
         "id": row["id"],
-        "student_id": row["student_id"],
-        "student_name": row["student_name"],
-        "lesson_id": row["lesson_id"],
-        "device_id": row["device_id"],
-        "recognized_at": row["recognized_at"],
+        "aluno_id": row["aluno_id"],
+        "aluno_nome": row["aluno_nome"],
+        "aula_id": row["aula_id"],
+        "dispositivo_id": row["dispositivo_id"],
+        "reconhecido_em": row["reconhecido_em"],
         "score": row["score"],
         "is_new": is_new,
     }
@@ -159,28 +157,30 @@ def save_attendance_event(event: dict) -> dict:
 
 def rebuild_runtime_cache() -> None:
     with connect() as conn:
-        enrollment_rows = conn.execute(
-            "SELECT lesson_id, student_id FROM enrollments"
+        matricula_rows = conn.execute(
+            "SELECT aula_id, aluno_id FROM matriculas_aula"
         ).fetchall()
-        embedding_rows = conn.execute("""
-            SELECT face_embeddings.id, face_embeddings.student_id, face_embeddings.embedding
-            FROM face_embeddings
-            JOIN students ON students.id = face_embeddings.student_id
-            WHERE students.active = 1
-            """).fetchall()
+        embedding_rows = conn.execute(
+            """
+            SELECT embeddings_faciais.id, embeddings_faciais.aluno_id, embeddings_faciais.vetor
+            FROM embeddings_faciais
+            JOIN alunos ON alunos.id = embeddings_faciais.aluno_id
+            WHERE alunos.ativo = 1
+            """
+        ).fetchall()
 
-    lesson_students: dict[str, list[str]] = {}
-    for row in enrollment_rows:
-        lesson_students.setdefault(row["lesson_id"], []).append(row["student_id"])
+    aula_alunos: dict[str, list[str]] = {}
+    for row in matricula_rows:
+        aula_alunos.setdefault(row["aula_id"], []).append(row["aluno_id"])
 
     embeddings = {
         row["id"]: msgpack.packb(
             {
-                "studentId": row["student_id"],
-                "embedding": row["embedding"],
+                "alunoId": row["aluno_id"],
+                "embedding": row["vetor"],
             },
             use_bin_type=True,
         )
         for row in embedding_rows
     }
-    replace_runtime_cache(lesson_students, embeddings)
+    replace_runtime_cache(aula_alunos, embeddings)

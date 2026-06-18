@@ -11,6 +11,15 @@ from app.repository import rebuild_runtime_cache
 
 logger = logging.getLogger(__name__)
 
+SYNC_ENTITIES = (
+    "salas",
+    "dispositivos",
+    "aulas",
+    "alunos",
+    "matriculas_aula",
+    "embeddings_faciais",
+)
+
 
 def _headers() -> dict[str, str]:
     headers = {"X-Node-Id": NODE_ID}
@@ -39,11 +48,10 @@ def _embedding_blob(value) -> bytes:
     if isinstance(value, str):
         return base64.b64decode(value)
     if isinstance(value, list):
-        data = msgpack.packb(
+        return msgpack.packb(
             {"dtype": "float32", "shape": [1, len(value)], "data": value},
             use_bin_type=True,
         )
-        return data
     raise ValueError("unsupported embedding payload")
 
 
@@ -59,32 +67,39 @@ def _upsert_many(conn, table: str, rows: list[dict], columns: list[str]) -> None
     conn.executemany(sql, [tuple(row[col] for col in columns) for row in rows])
 
 
-def _device_row(item: dict) -> dict:
+def _sala_row(item: dict) -> dict:
     return {
         "id": item["id"],
-        "locale_id": item["locale_id"],
-        "active": int(item.get("active", True)),
+        "nome": item["nome"],
+    }
+
+
+def _dispositivo_row(item: dict) -> dict:
+    return {
+        "id": item["id"],
+        "sala_id": item["sala_id"],
+        "ativo": int(item.get("ativo", True)),
         "status": item.get("status"),
     }
 
 
-def _lesson_row(item: dict) -> dict:
+def _aula_row(item: dict) -> dict:
     return {
         "id": item["id"],
-        "name": item["name"],
-        "locale_id": item["locale_id"],
-        "starts_at": item["starts_at"],
-        "ends_at": item["ends_at"],
+        "nome": item["nome"],
+        "sala_id": item["sala_id"],
+        "inicio": item["inicio"],
+        "fim": item["fim"],
         "status": item.get("status"),
     }
 
 
-def _student_row(item: dict) -> dict:
+def _aluno_row(item: dict) -> dict:
     return {
         "id": item["id"],
-        "registration": item.get("registration") or item["id"],
-        "name": item["name"],
-        "active": int(item.get("active", True)),
+        "matricula": item.get("matricula") or item["id"],
+        "nome": item["nome"],
+        "ativo": int(item.get("ativo", True)),
     }
 
 
@@ -98,18 +113,26 @@ def _delete_by_ids(conn, table: str, ids: list[str]) -> None:
 
 
 def _apply_deletions(conn, deleted: dict) -> None:
-    for item in deleted.get("enrollments", []):
+    for item in deleted.get("matriculas_aula", []):
         conn.execute(
-            "DELETE FROM enrollments WHERE lesson_id = ? AND student_id = ?",
-            (item["lesson_id"], item["student_id"]),
+            "DELETE FROM matriculas_aula WHERE aula_id = ? AND aluno_id = ?",
+            (item["aula_id"], item["aluno_id"]),
         )
 
-    for table in ("face_embeddings", "lessons", "devices", "students", "locales"):
-        _delete_by_ids(conn, table, deleted.get(table, []))
+    for table, entity in (
+        ("embeddings_faciais", "embeddings_faciais"),
+        ("aulas", "aulas"),
+        ("dispositivos", "dispositivos"),
+        ("alunos", "alunos"),
+        ("salas", "salas"),
+    ):
+        _delete_by_ids(conn, table, deleted.get(entity, []))
 
 
 def _save_cursors(conn, cursors: dict) -> None:
     for entity, cursor in cursors.items():
+        if entity not in SYNC_ENTITIES:
+            continue
         conn.execute(
             """
             INSERT INTO sync_state (entity, cursor)
@@ -124,21 +147,21 @@ def apply_pull_payload(payload: dict) -> None:
     data = payload.get("data", payload)
     deleted = payload.get("deleted", {})
     upserts = (
-        ("locales", data.get("locales", []), ["id", "name"]),
+        ("salas", [_sala_row(item) for item in data.get("salas", [])], ["id", "nome"]),
         (
-            "devices",
-            [_device_row(item) for item in data.get("devices", [])],
-            ["id", "locale_id", "active", "status"],
+            "dispositivos",
+            [_dispositivo_row(item) for item in data.get("dispositivos", [])],
+            ["id", "sala_id", "ativo", "status"],
         ),
         (
-            "lessons",
-            [_lesson_row(item) for item in data.get("lessons", [])],
-            ["id", "name", "locale_id", "starts_at", "ends_at", "status"],
+            "aulas",
+            [_aula_row(item) for item in data.get("aulas", [])],
+            ["id", "nome", "sala_id", "inicio", "fim", "status"],
         ),
         (
-            "students",
-            [_student_row(item) for item in data.get("students", [])],
-            ["id", "registration", "name", "active"],
+            "alunos",
+            [_aluno_row(item) for item in data.get("alunos", [])],
+            ["id", "matricula", "nome", "ativo"],
         ),
     )
 
@@ -146,25 +169,25 @@ def apply_pull_payload(payload: dict) -> None:
         for table, rows, columns in upserts:
             _upsert_many(conn, table, rows, columns)
 
-        for item in data.get("enrollments", []):
+        for item in data.get("matriculas_aula", []):
             conn.execute(
-                "INSERT OR IGNORE INTO enrollments (lesson_id, student_id) VALUES (?, ?)",
-                (item["lesson_id"], item["student_id"]),
+                "INSERT OR IGNORE INTO matriculas_aula (aula_id, aluno_id) VALUES (?, ?)",
+                (item["aula_id"], item["aluno_id"]),
             )
 
-        for item in data.get("face_embeddings", []):
+        for item in data.get("embeddings_faciais", []):
             conn.execute(
                 """
-                INSERT INTO face_embeddings (id, student_id, embedding)
+                INSERT INTO embeddings_faciais (id, aluno_id, vetor)
                 VALUES (?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
-                  student_id = excluded.student_id,
-                  embedding = excluded.embedding
+                  aluno_id = excluded.aluno_id,
+                  vetor = excluded.vetor
                 """,
                 (
-                    item.get("id") or item["student_id"],
-                    item["student_id"],
-                    _embedding_blob(item["embedding"]),
+                    item["id"],
+                    item["aluno_id"],
+                    _embedding_blob(item["vetor"]),
                 ),
             )
 
@@ -177,17 +200,27 @@ def apply_pull_payload(payload: dict) -> None:
 def _current_cursors() -> dict[str, str]:
     with connect() as conn:
         rows = conn.execute("SELECT entity, cursor FROM sync_state").fetchall()
-        return {row["entity"]: row["cursor"] for row in rows}
+        return {
+            row["entity"]: row["cursor"]
+            for row in rows
+            if row["entity"] in SYNC_ENTITIES
+        }
 
 
 def _pending_attendance() -> list[dict]:
     with connect() as conn:
         rows = conn.execute(
             """
-            SELECT id, student_id, lesson_id, device_id, recognized_at, score
-            FROM attendance_events
+            SELECT
+              id,
+              aluno_id,
+              aula_id,
+              dispositivo_id,
+              reconhecido_em,
+              score
+            FROM eventos_presenca
             WHERE sync_status = 'pending'
-            ORDER BY recognized_at
+            ORDER BY reconhecido_em
             LIMIT 100
             """
         ).fetchall()
@@ -199,7 +232,7 @@ def _mark_synced(ids: list[str]) -> None:
         return
     with transaction() as conn:
         conn.executemany(
-            "UPDATE attendance_events SET sync_status = 'synced' WHERE id = ?",
+            "UPDATE eventos_presenca SET sync_status = 'synced' WHERE id = ?",
             [(event_id,) for event_id in ids],
         )
 
@@ -212,7 +245,7 @@ async def _push_device_statuses(client) -> None:
     response = await client.post(
         f"{MAIN_API_URL}/edge/devices/status",
         headers=_headers(),
-        json={"node_id": NODE_ID, "devices": statuses},
+        json={"node_id": NODE_ID, "dispositivos": statuses},
     )
     _raise_for_status(response, "device status push")
 
@@ -242,7 +275,7 @@ async def sync_once() -> None:
             push = await client.post(
                 f"{MAIN_API_URL}/edge/attendance",
                 headers=_headers(),
-                json={"node_id": NODE_ID, "events": pending},
+                json={"node_id": NODE_ID, "eventos": pending},
             )
             _raise_for_status(push, "attendance push")
             synced_ids = push.json().get(

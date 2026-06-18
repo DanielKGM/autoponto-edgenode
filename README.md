@@ -1,130 +1,164 @@
 # AutoPonto Edge Node
 
-Computacao de borda para Raspberry Pi do sistema AutoPonto.
+Computacao de borda para Raspberry Pi do AutoPonto.
 
 O node conversa com:
 
-- dispositivos ESP32 via HTTP e MQTT local;
-- servidor principal via sincronizacao por polling;
-- modelos ONNX locais para deteccao/reconhecimento facial.
+- ESP32 via HTTP e MQTT local;
+- servidor principal via polling autenticado;
+- modelos ONNX locais para deteccao e reconhecimento facial.
 
-## Arquitetura atual
+## Arquitetura
 
 Containers ativos:
 
-- `edge-app`: API HTTP, listener/publicador MQTT, SQLite local, sync e persistencia de presencas.
-- `face-worker`: processamento OpenCV/ONNX e reconhecimento facial.
-- `redis`: fila de frames, fila de presencas e cache quente de embeddings/elegibilidade.
+- `edge-app`: API HTTP, MQTT local, SQLite, sincronizacao e persistencia de presenca.
+- `face-worker`: OpenCV/ONNX, reconhecimento facial e emissao de evento positivo.
+- `redis`: filas e cache quente reconstruivel.
 - `mosquitto`: broker MQTT local para os ESP32.
-
-O antigo `edge-api` e o antigo `mqtt-listener` foram fundidos no `edge-app`.
 
 ```mermaid
 flowchart LR
-  ESP32[ESP32] -->|HTTP /context e /frame| EdgeApp[edge-app]
+  ESP32[ESP32] -->|GET /context<br/>POST /frame| EdgeApp[edge-app]
   ESP32 <-->|MQTT sts/cmd| Mosquitto[mosquitto]
-  EdgeApp <-->|status e cmd MQTT| Mosquitto
+  EdgeApp <-->|status e comando| Mosquitto
   EdgeApp <-->|filas e cache| Redis[redis]
-  FaceWorker[face-worker] <-->|frames, embeddings, presencas| Redis
-  EdgeApp <-->|polling sync| MainAPI[servidor principal]
-  EdgeApp --> SQLite[(SQLite local)]
+  FaceWorker[face-worker] <-->|frames, embeddings, eventos| Redis
+  EdgeApp --> SQLite[(SQLite)]
+  EdgeApp <-->|polling| MainAPI[referencia-api]
 ```
 
-## Modelo local
+## Modelo Local
 
-`attendance_event` e uma presenca local valida: ela so existe quando um aluno foi reconhecido, esta matriculado na `lesson` atual do dispositivo e precisa ser sincronizado com o servidor principal.
+O edge nao replica o modelo academico completo da API principal. Ele guarda so o que precisa para operar offline:
 
-`lesson` representa a cadeira/aula ofertada no edge, por exemplo `Algoritmos` ou `Matematica Aplicada`. Ela acontece em um `locale`, como `Laboratorio A` ou `Sala 208`, dentro de uma janela `starts_at`/`ends_at`.
+- saber qual dispositivo esta em qual sala;
+- descobrir a aula atual da sala;
+- validar se o aluno pertence a aula;
+- reconhecer rostos por embeddings;
+- registrar uma presenca valida e sincronizavel.
 
-`enrollments` e a tabela relacional entre estudantes e lessons. Ela responde a pergunta: este estudante pertence a esta aula atual?
+Tabelas SQLite:
 
-SQLite e a fonte duravel local:
-
-- `locales`: `id`, `name`
-- `devices`: `id`, `locale_id`, `active`
-- `lessons`: `id`, `name`, `locale_id`, `starts_at`, `ends_at`
-- `students`: `id`, `registration`, `name`, `active`
-- `enrollments`: `lesson_id`, `student_id`
-- `face_embeddings`: `id`, `student_id`, `embedding`
-- `attendance_events`: `id`, `student_id`, `lesson_id`, `device_id`, `recognized_at`, `score`, `sync_status`
+- `salas`: `id`, `nome`
+- `dispositivos`: `id`, `sala_id`, `ativo`, `status`
+- `aulas`: `id`, `nome`, `sala_id`, `inicio`, `fim`, `status`
+- `alunos`: `id`, `matricula`, `nome`, `ativo`
+- `matriculas_aula`: `aula_id`, `aluno_id`
+- `embeddings_faciais`: `id`, `aluno_id`, `vetor`
+- `eventos_presenca`: `id`, `aluno_id`, `aula_id`, `dispositivo_id`, `reconhecido_em`, `score`, `sync_status`
 - `sync_state`: `entity`, `cursor`
 
-Redis e cache/fila reconstruivel:
-
-- `queue:frames`
-- `queue:attendance_events`
-- `face:embeddings`
-- `lesson:{lesson_id}:students`
-- `device:{device_id}:status`
-- `devices:last_seen`
+`eventos_presenca` tem `UNIQUE(aluno_id, aula_id)`. Portanto, reconhecer a mesma pessoa de novo na mesma aula nao cria uma segunda presenca; o feedback usa o horario da primeira presenca.
 
 ```mermaid
 erDiagram
-  LOCALES ||--o{ DEVICES : has
-  LOCALES ||--o{ LESSONS : hosts
-  LESSONS ||--o{ ENROLLMENTS : allows
-  STUDENTS ||--o{ ENROLLMENTS : attends
-  STUDENTS ||--o{ FACE_EMBEDDINGS : has
-  STUDENTS ||--o{ ATTENDANCE_EVENTS : generates
-  LESSONS ||--o{ ATTENDANCE_EVENTS : receives
-  DEVICES ||--o{ ATTENDANCE_EVENTS : records
+  SALAS ||--o{ DISPOSITIVOS : possui
+  SALAS ||--o{ AULAS : recebe
+  AULAS ||--o{ MATRICULAS_AULA : permite
+  ALUNOS ||--o{ MATRICULAS_AULA : participa
+  ALUNOS ||--o{ EMBEDDINGS_FACIAIS : possui
+  ALUNOS ||--o{ EVENTOS_PRESENCA : gera
+  AULAS ||--o{ EVENTOS_PRESENCA : recebe
+  DISPOSITIVOS ||--o{ EVENTOS_PRESENCA : registra
 
-  LOCALES {
+  SALAS {
     string id PK
-    string name
+    string nome
   }
-  DEVICES {
+  DISPOSITIVOS {
     string id PK
-    string locale_id FK
-    boolean active
+    string sala_id FK
+    boolean ativo
+    string status
   }
-  LESSONS {
+  AULAS {
     string id PK
-    string name
-    string locale_id FK
-    datetime starts_at
-    datetime ends_at
+    string nome
+    string sala_id FK
+    datetime inicio
+    datetime fim
+    string status
   }
-  STUDENTS {
+  ALUNOS {
     string id PK
-    string registration
-    string name
-    boolean active
+    string matricula
+    string nome
+    boolean ativo
   }
-  ENROLLMENTS {
-    string lesson_id PK,FK
-    string student_id PK,FK
+  MATRICULAS_AULA {
+    string aula_id PK,FK
+    string aluno_id PK,FK
   }
-  FACE_EMBEDDINGS {
+  EMBEDDINGS_FACIAIS {
     string id PK
-    string student_id FK
-    blob embedding
+    string aluno_id FK
+    blob vetor
   }
-  ATTENDANCE_EVENTS {
+  EVENTOS_PRESENCA {
     string id PK
-    string student_id
-    string lesson_id
-    string device_id
-    datetime recognized_at
+    string aluno_id
+    string aula_id
+    string dispositivo_id
+    datetime reconhecido_em
     float score
     string sync_status
   }
 ```
 
-## Fluxo de presenca
+## Redis
 
-1. ESP32 chama `GET /context` com `X-Device-Id` e `X-Auth`.
-2. `edge-app` consulta SQLite e retorna aula atual/proxima para o local do dispositivo.
-3. ESP32 envia `POST /frame` com `Content-Type: image/jpeg`.
-4. `edge-app` so enfileira o frame se houver `lesson` atual para o dispositivo.
-5. `face-worker` consome `queue:frames`.
-6. O reconhecimento compara apenas embeddings de alunos matriculados naquela `lesson`.
-7. Em sucesso autorizado, o `face-worker` enfileira evento em `queue:attendance_events`.
-8. O `edge-app` persiste ou recupera a presenca existente em `attendance_events`.
-9. Depois da persistencia, o `edge-app` publica `cmd/{device_id}` com `auth: true` e uma mensagem com nome do aluno e horario da primeira presenca.
-10. Em falha, sem rosto, aluno desconhecido ou aluno fora da lesson:
-   - nao publica MQTT;
-   - apenas registra log.
+Redis e fila/cache, nao fonte duravel.
+
+- `queue:frames`: frames JPEG recebidos do ESP32.
+- `queue:eventos_presenca`: eventos positivos gerados pelo `face-worker`.
+- `face:embeddings`: hash de embeddings por `embedding_id`.
+- `aula:{aula_id}:alunos`: set de alunos elegiveis para a aula.
+- `dispositivo:{dispositivo_id}:status`: ultimo status MQTT recebido.
+- `dispositivos:last_seen`: hash simples de ultimo visto por dispositivo.
+
+## API Local Para ESP32
+
+### `GET /context`
+
+Headers:
+
+- `X-Device-Id`
+- `X-Auth`
+
+Resposta mantida simples para o firmware:
+
+```json
+{
+  "lesson_name": "AMBIENTAL",
+  "msRemaining": 6500000,
+  "msForNext": 0
+}
+```
+
+### `POST /frame`
+
+Headers:
+
+- `X-Device-Id`
+- `X-Auth`
+- `Content-Type: image/jpeg`
+
+O frame so entra em `queue:frames` se existir uma aula atual para a sala do dispositivo.
+
+Item interno da fila:
+
+```json
+{
+  "dispositivoId": "dispositivo-uuid",
+  "salaId": "sala-uuid",
+  "aulaId": "aula-uuid",
+  "receivedAt": "2026-06-18T12:00:00Z",
+  "frame": "<bytes>"
+}
+```
+
+## Fluxo De Presenca
 
 ```mermaid
 sequenceDiagram
@@ -133,67 +167,153 @@ sequenceDiagram
   participant API as edge-app
   participant R as redis
   participant W as face-worker
-  participant MQ as mosquitto
   participant DB as SQLite
+  participant MQ as mosquitto
 
   ESP->>API: GET /context
-  API->>DB: buscar device, locale e lesson atual/proxima
+  API->>DB: buscar dispositivo, sala e aula atual/proxima
   API-->>ESP: lesson_name, msRemaining, msForNext
   ESP->>API: POST /frame JPEG
-  API->>DB: validar lesson atual do device
-  API->>R: RPUSH queue:frames com lessonId
+  API->>DB: validar aula atual do dispositivo
+  API->>R: RPUSH queue:frames com aulaId
   W->>R: BLPOP queue:frames
-  W->>R: ler lesson:{lessonId}:students e face:embeddings
+  W->>R: ler aula:{aulaId}:alunos e face:embeddings
   W->>W: detectar rosto e comparar embeddings elegiveis
-  alt aluno reconhecido e matriculado
-    W->>R: RPUSH queue:attendance_events
-    API->>R: BLPOP queue:attendance_events
-    API->>DB: INSERT OR IGNORE attendance_events pending
-    API->>MQ: publish cmd/{device_id} auth=true msg=nome+horario
-  else falha ou aluno nao elegivel
+  alt aluno reconhecido e elegivel
+    W->>R: RPUSH queue:eventos_presenca
+    API->>R: BLPOP queue:eventos_presenca
+    API->>DB: INSERT OR IGNORE eventos_presenca
+    API->>MQ: publish cmd/{dispositivo_id}
+  else falha
     W-->>W: log sem MQTT
   end
 ```
 
-## Sincronizacao
+Payload MQTT positivo:
 
-O servidor principal ainda nao existe, entao o contrato abaixo define a expectativa do edge.
+```json
+{
+  "auth": true,
+  "msg": "Daniel Silva - registrado 08:42"
+}
+```
 
-Se `MAIN_API_URL` estiver vazio, o node opera offline e nao tenta sincronizar. Quando configurado, `edge-app` roda um loop periodico:
+Nao ha MQTT negativo. Falha de decode, sem rosto, aluno desconhecido ou aluno fora da aula atual apenas gera log.
 
-1. Le os cursores locais em `sync_state`.
-2. Chama `GET /edge/pull` com `node_id` e cursores.
-3. Recebe cadastros alterados e remocoes.
-4. Aplica tudo no SQLite dentro de uma transacao.
-5. Reconstroi o cache Redis usado pelo `face-worker`.
-6. Busca `attendance_events` com `sync_status = pending`.
-7. Envia esses eventos para `POST /edge/attendance`.
-8. Marca como `synced` apenas os IDs confirmados pelo servidor.
-9. Se qualquer etapa falhar, mantem dados locais e tenta novamente no proximo ciclo.
+## Sincronizacao Com A API Principal
 
-Payload esperado de pull:
+Se `MAIN_API_URL` estiver vazio, o edge opera offline.
+
+Autenticacao:
+
+```http
+Authorization: NodeToken <MAIN_API_TOKEN>
+X-Node-Id: <NODE_ID>
+```
+
+`NODE_ID` deve ser o `NoBorda.codigo` ou o UUID do no associado ao token.
+
+### Pull
+
+Endpoint:
+
+```http
+GET /edge/pull?node_id=<NODE_ID>&cursors=<msgpack-hex>
+```
+
+Payload esperado:
 
 ```json
 {
   "data": {
-    "locales": [],
-    "devices": [],
-    "lessons": [],
-    "students": [],
-    "enrollments": [],
-    "face_embeddings": []
+    "salas": [],
+    "dispositivos": [],
+    "aulas": [],
+    "alunos": [],
+    "matriculas_aula": [],
+    "embeddings_faciais": []
   },
   "deleted": {
-    "locales": [],
-    "devices": [],
-    "lessons": [],
-    "students": [],
-    "enrollments": [],
-    "face_embeddings": []
+    "salas": [],
+    "dispositivos": [],
+    "aulas": [],
+    "alunos": [],
+    "matriculas_aula": [],
+    "embeddings_faciais": []
   },
   "cursors": {
-    "students": "cursor-value"
+    "aulas": "2026-06-18T12:00:00Z"
   }
+}
+```
+
+Campos por recurso:
+
+- `salas`: `id`, `nome`
+- `dispositivos`: `id`, `sala_id`, `ativo`, `status`
+- `aulas`: `id`, `nome`, `sala_id`, `inicio`, `fim`, `status`
+- `alunos`: `id`, `matricula`, `nome`, `ativo`
+- `matriculas_aula`: `aula_id`, `aluno_id`
+- `embeddings_faciais`: `id`, `aluno_id`, `vetor`
+
+O edge aplica o pull em transacao SQLite e depois reconstrui o cache Redis.
+
+### Push De Presencas
+
+Endpoint:
+
+```http
+POST /edge/attendance
+```
+
+Payload:
+
+```json
+{
+  "node_id": "NO-CCET-01",
+  "eventos": [
+    {
+      "id": "evento-local-uuid",
+      "aluno_id": "aluno-uuid",
+      "aula_id": "aula-uuid",
+      "dispositivo_id": "dispositivo-uuid",
+      "reconhecido_em": "2026-06-18T11:42:00Z",
+      "score": 0.72
+    }
+  ]
+}
+```
+
+Resposta esperada:
+
+```json
+{
+  "synced_ids": ["evento-local-uuid"]
+}
+```
+
+### Push De Status Dos ESP32
+
+O ESP32 publica localmente em `sts/{dispositivo_id}`: `offline`, `working` ou `idle`.
+
+Endpoint:
+
+```http
+POST /edge/devices/status
+```
+
+Payload:
+
+```json
+{
+  "node_id": "NO-CCET-01",
+  "dispositivos": [
+    {
+      "dispositivo_id": "dispositivo-uuid",
+      "status": "working",
+      "reportado_em": "2026-06-18T11:42:00Z"
+    }
+  ]
 }
 ```
 
@@ -201,28 +321,29 @@ Payload esperado de pull:
 flowchart TD
   Timer[intervalo de sync] --> Cursors[ler sync_state]
   Cursors --> Pull[GET /edge/pull]
-  Pull --> Tx[transacao SQLite]
-  Tx --> Cache[reconstruir Redis cache]
-  Cache --> Pending[buscar attendance_events pending]
+  Pull --> Tx[aplicar SQLite em transacao]
+  Tx --> Cache[reconstruir Redis]
+  Cache --> Status[POST /edge/devices/status]
+  Status --> Pending[buscar eventos_presenca pending]
   Pending --> Push[POST /edge/attendance]
-  Push --> Confirm{servidor confirmou?}
+  Push --> Confirm{confirmou ids?}
   Confirm -->|sim| Synced[marcar sync_status=synced]
   Confirm -->|nao| Retry[manter pending]
-  Retry --> Timer
   Synced --> Timer
+  Retry --> Timer
 ```
 
-Variaveis:
+## Reset De Dados Local
 
-- `NODE_ID`
-- `MAIN_API_URL`
-- `MAIN_API_TOKEN`
-- `SYNC_INTERVAL_SECONDS`
+Use quando mudar schema local ou contrato de sync:
 
-Endpoints esperados no servidor principal:
+```bash
+docker compose down -v --remove-orphans
+rm -f data/db/db.sql data/db/db.sql-wal data/db/db.sql-shm
+docker compose up -d --build
+```
 
-- `GET /edge/pull`: retorna cadastros, horarios, alunos, matriculas, embeddings, remocoes e cursores.
-- `POST /edge/attendance`: recebe presencas pendentes e retorna ids sincronizados.
+Depois do reset, os dados locais devem vir exclusivamente de `GET /edge/pull`.
 
 ## Setup
 
@@ -234,58 +355,67 @@ sudo apt install docker-compose-plugin -y
 sudo sysctl vm.overcommit_memory=1
 ```
 
-Firewall:
-
-```bash
-sudo apt install ufw
-sudo ufw default deny incoming
-sudo ufw default allow outgoing
-sudo ufw allow 1883/tcp
-sudo ufw allow 22/tcp
-sudo ufw allow 8080/tcp
-```
-
-Env:
-
 ```bash
 cp .env.example .env
 chmod +x scripts/init-mosquitto-password.sh
 ./scripts/init-mosquitto-password.sh
-```
-
-Subir:
-
-```bash
 docker compose up -d --build
 docker compose ps
 ```
 
 ## Modelos ONNX
 
-Modelos usados do OpenCV Zoo:
-
 ```bash
 wget https://github.com/opencv/opencv_zoo/raw/main/models/face_detection_yunet/face_detection_yunet_2023mar.onnx -O ./data/models/face_detection_yunet.onnx
 wget https://github.com/opencv/opencv_zoo/raw/main/models/face_recognition_sface/face_recognition_sface_2021dec.onnx -O ./data/models/face_recognition_sface.onnx
 ```
 
-## systemd
+## Mudancas Necessarias Na `referencia-api`
 
-```bash
-sudo nano /etc/systemd/system/edge-node.service
-sudo systemctl daemon-reexec
-sudo systemctl daemon-reload
-sudo systemctl enable edge-node
-sudo systemctl start edge-node
-sudo systemctl status edge-node
-```
+Arquivos principais:
 
-## mDNS
+- `api/services/sincronizacao_borda.py`
+- `api/views/edge_contract.py`
+- `api/urls.py`
+- testes de integracao do contrato edge, se existirem
 
-```bash
-sudo hostnamectl set-hostname autopontonode
-sudo apt update
-sudo apt install avahi-daemon
-sudo systemctl enable avahi-daemon
-sudo systemctl start avahi-daemon
-```
+Alteracoes em `api/services/sincronizacao_borda.py`:
+
+- Trocar `ENTIDADES_SYNC` para:
+  - `salas`
+  - `dispositivos`
+  - `aulas`
+  - `alunos`
+  - `matriculas_aula`
+  - `embeddings_faciais`
+- Em `montar_payload_pull`, enviar:
+  - `salas`: derivadas de `Sala`, somente `id`, `nome`;
+  - `dispositivos`: derivados de `DispositivoEsp32`, somente `id`, `sala_id`, `ativo`, `status`;
+  - `aulas`: derivadas de `Aula`, somente `id`, `nome`, `sala_id`, `inicio`, `fim`, `status`;
+  - `alunos`: derivados de `Usuario`, somente `id`, `matricula`, `nome`, `ativo`;
+  - `matriculas_aula`: projecao de `MatriculaTurma` para cada `Aula`, somente `aula_id`, `aluno_id`;
+  - `embeddings_faciais`: derivados de `EmbeddingFacial`, somente `id`, `aluno_id`, `vetor`.
+- Em `deleted`, usar as mesmas chaves acima.
+- Em `cursors`, usar as mesmas chaves acima.
+- Em `receber_presencas_borda`, trocar `events` por `eventos` e campos:
+  - `student_id` -> `aluno_id`
+  - `lesson_id` -> `aula_id`
+  - `device_id` -> `dispositivo_id`
+  - `recognized_at` -> `reconhecido_em`
+- Em `atualizar_status_dispositivos_borda`, trocar `devices` por `dispositivos` e campos:
+  - `device_id` -> `dispositivo_id`
+  - `reported_at` -> `reportado_em`
+
+Alteracoes em `api/views/edge_contract.py`:
+
+- Atualizar schemas/exemplos OpenAPI para os novos nomes de payload.
+- Manter autenticacao `NodeToken`.
+
+Alteracoes em `api/urls.py`:
+
+- Os paths podem continuar iguais:
+  - `GET /edge/pull`
+  - `POST /edge/attendance`
+  - `POST /edge/devices/status`
+
+O backend deve continuar validando posse do dispositivo pelo `NoBorda`, sala da aula, matricula ativa, janela `inicio/fim` e status da aula.

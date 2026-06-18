@@ -9,60 +9,60 @@ SCHEMA = """
 PRAGMA journal_mode=WAL;
 PRAGMA foreign_keys=ON;
 
-CREATE TABLE IF NOT EXISTS locales (
+CREATE TABLE IF NOT EXISTS salas (
   id TEXT PRIMARY KEY,
-  name TEXT NOT NULL
+  nome TEXT NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS devices (
+CREATE TABLE IF NOT EXISTS dispositivos (
   id TEXT PRIMARY KEY,
-  locale_id TEXT NOT NULL,
-  active INTEGER NOT NULL DEFAULT 1,
+  sala_id TEXT NOT NULL,
+  ativo INTEGER NOT NULL DEFAULT 1,
   status TEXT,
-  FOREIGN KEY (locale_id) REFERENCES locales(id)
+  FOREIGN KEY (sala_id) REFERENCES salas(id)
 );
 
-CREATE TABLE IF NOT EXISTS lessons (
+CREATE TABLE IF NOT EXISTS aulas (
   id TEXT PRIMARY KEY,
-  name TEXT NOT NULL,
-  locale_id TEXT NOT NULL,
-  starts_at TEXT NOT NULL,
-  ends_at TEXT NOT NULL,
+  nome TEXT NOT NULL,
+  sala_id TEXT NOT NULL,
+  inicio TEXT NOT NULL,
+  fim TEXT NOT NULL,
   status TEXT,
-  FOREIGN KEY (locale_id) REFERENCES locales(id)
+  FOREIGN KEY (sala_id) REFERENCES salas(id)
 );
 
-CREATE TABLE IF NOT EXISTS students (
+CREATE TABLE IF NOT EXISTS alunos (
   id TEXT PRIMARY KEY,
-  registration TEXT NOT NULL,
-  name TEXT NOT NULL,
-  active INTEGER NOT NULL DEFAULT 1
+  matricula TEXT NOT NULL,
+  nome TEXT NOT NULL,
+  ativo INTEGER NOT NULL DEFAULT 1
 );
 
-CREATE TABLE IF NOT EXISTS enrollments (
-  lesson_id TEXT NOT NULL,
-  student_id TEXT NOT NULL,
-  PRIMARY KEY (lesson_id, student_id),
-  FOREIGN KEY (lesson_id) REFERENCES lessons(id) ON DELETE CASCADE,
-  FOREIGN KEY (student_id) REFERENCES students(id) ON DELETE CASCADE
+CREATE TABLE IF NOT EXISTS matriculas_aula (
+  aula_id TEXT NOT NULL,
+  aluno_id TEXT NOT NULL,
+  PRIMARY KEY (aula_id, aluno_id),
+  FOREIGN KEY (aula_id) REFERENCES aulas(id) ON DELETE CASCADE,
+  FOREIGN KEY (aluno_id) REFERENCES alunos(id) ON DELETE CASCADE
 );
 
-CREATE TABLE IF NOT EXISTS face_embeddings (
+CREATE TABLE IF NOT EXISTS embeddings_faciais (
   id TEXT PRIMARY KEY,
-  student_id TEXT NOT NULL,
-  embedding BLOB NOT NULL,
-  FOREIGN KEY (student_id) REFERENCES students(id) ON DELETE CASCADE
+  aluno_id TEXT NOT NULL,
+  vetor BLOB NOT NULL,
+  FOREIGN KEY (aluno_id) REFERENCES alunos(id) ON DELETE CASCADE
 );
 
-CREATE TABLE IF NOT EXISTS attendance_events (
+CREATE TABLE IF NOT EXISTS eventos_presenca (
   id TEXT PRIMARY KEY,
-  student_id TEXT NOT NULL,
-  lesson_id TEXT NOT NULL,
-  device_id TEXT NOT NULL,
-  recognized_at TEXT NOT NULL,
+  aluno_id TEXT NOT NULL,
+  aula_id TEXT NOT NULL,
+  dispositivo_id TEXT NOT NULL,
+  reconhecido_em TEXT NOT NULL,
   score REAL NOT NULL,
   sync_status TEXT NOT NULL DEFAULT 'pending',
-  UNIQUE(student_id, lesson_id)
+  UNIQUE(aluno_id, aula_id)
 );
 
 CREATE TABLE IF NOT EXISTS sync_state (
@@ -70,34 +70,18 @@ CREATE TABLE IF NOT EXISTS sync_state (
   cursor TEXT NOT NULL
 );
 
-CREATE INDEX IF NOT EXISTS idx_lessons_locale_time ON lessons(locale_id, starts_at, ends_at);
-CREATE INDEX IF NOT EXISTS idx_embeddings_student ON face_embeddings(student_id);
-CREATE INDEX IF NOT EXISTS idx_attendance_sync ON attendance_events(sync_status);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_attendance_student_lesson
-  ON attendance_events(student_id, lesson_id);
+CREATE INDEX IF NOT EXISTS idx_aulas_sala_tempo ON aulas(sala_id, inicio, fim);
+CREATE INDEX IF NOT EXISTS idx_embeddings_aluno ON embeddings_faciais(aluno_id);
+CREATE INDEX IF NOT EXISTS idx_eventos_presenca_sync ON eventos_presenca(sync_status);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_eventos_presenca_aluno_aula
+  ON eventos_presenca(aluno_id, aula_id);
 """
-
-
-def _ensure_column(
-    conn: sqlite3.Connection,
-    table: str,
-    column: str,
-    definition: str,
-) -> None:
-    columns = {
-        row["name"]
-        for row in conn.execute(f"PRAGMA table_info({table})").fetchall()
-    }
-    if column not in columns:
-        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
 
 
 def init_db() -> None:
     SQLITE_PATH.parent.mkdir(parents=True, exist_ok=True)
     with connect() as conn:
         conn.executescript(SCHEMA)
-        _ensure_column(conn, "devices", "status", "TEXT")
-        _ensure_column(conn, "lessons", "status", "TEXT")
 
 
 def connect() -> sqlite3.Connection:

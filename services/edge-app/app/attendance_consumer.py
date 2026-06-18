@@ -16,27 +16,24 @@ def first_two_names(name: str) -> str:
 
 
 def format_attendance_message(stored_event: dict) -> str:
-    student_name = first_two_names(stored_event["student_name"])
-    recognized_at = parse_dt(stored_event["recognized_at"]).strftime("%H:%M")
-    return f"{student_name} - registrado {recognized_at}"
+    aluno_nome = first_two_names(stored_event["aluno_nome"])
+    reconhecido_em = parse_dt(stored_event["reconhecido_em"]).strftime("%H:%M")
+    return f"{aluno_nome} - registrado {reconhecido_em}"
 
 
 def handle_attendance_event(event: dict, mqtt_client) -> dict:
     stored = save_attendance_event(event)
     payload = {
         "auth": True,
-        "studentId": stored["student_id"],
         "msg": format_attendance_message(stored),
-        "recognizedAt": stored["recognized_at"],
-        "alreadyRegistered": not stored["is_new"],
     }
-    publish_command(mqtt_client, event["deviceId"], payload)
+    publish_command(mqtt_client, event["dispositivoId"], payload)
     logger.info(
-        "attendance event stored id=%s device=%s student=%s lesson=%s is_new=%s",
+        "attendance event stored id=%s dispositivo=%s aluno=%s aula=%s is_new=%s",
         stored["id"],
-        event.get("deviceId"),
-        stored["student_id"],
-        stored["lesson_id"],
+        event.get("dispositivoId"),
+        stored["aluno_id"],
+        stored["aula_id"],
         stored["is_new"],
     )
     return stored

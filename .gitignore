@@ -3,7 +3,7 @@
 !.env.example
 get-docker.sh
 
-autoponto-backend/
+referencia-api/
 
 # =========================
 # PYTHON
@@ -29,11 +29,6 @@ venv/
 data/**/*
 !data/**/
 !data/models/.gitkeep
-
-# temp
-embeddings/
-embeddings_mock
-data/debug
 
 # =========================
 # DOCKER

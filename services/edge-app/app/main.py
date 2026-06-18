@@ -11,7 +11,7 @@ from app.mqtt import build_status_listener
 from app.redis_store import enqueue_frame, is_frame_queue_full
 from app.repository import (
     compute_context_for_device,
-    get_current_lesson_for_device,
+    get_current_aula_for_device,
     rebuild_runtime_cache,
 )
 from app.sync import run_sync_loop
@@ -71,10 +71,10 @@ def get_context(
 
     context = compute_context_for_device(x_device_id)
     logger.info(
-        "context device=%s locale=%s lesson=%s msRemaining=%s msForNext=%s",
+        "context device=%s sala=%s aula=%s msRemaining=%s msForNext=%s",
         x_device_id,
-        context.locale_id,
-        context.lesson_id,
+        context.sala_id,
+        context.aula_id,
         context.ms_remaining,
         context.ms_for_next,
     )
@@ -94,10 +94,10 @@ async def post_frame(
     if content_type != "image/jpeg":
         raise HTTPException(status_code=415, detail="expected image/jpeg")
 
-    lesson = get_current_lesson_for_device(x_device_id)
-    if not lesson:
-        logger.info("frame ignored device=%s reason=no_current_lesson", x_device_id)
-        return {"ok": False, "reason": "no_current_lesson"}
+    aula = get_current_aula_for_device(x_device_id)
+    if not aula:
+        logger.info("frame ignored device=%s reason=no_current_aula", x_device_id)
+        return {"ok": False, "reason": "no_current_aula"}
 
     if is_frame_queue_full():
         logger.warning("frame rejected device=%s reason=queue_full", x_device_id)
@@ -109,15 +109,15 @@ async def post_frame(
 
     queue_len = enqueue_frame(
         x_device_id,
-        lesson.locale_id,
-        lesson.id,
+        aula.sala_id,
+        aula.id,
         body,
     )
     logger.info(
-        "frame accepted device=%s locale=%s lesson=%s bytes=%d queue_len=%d",
+        "frame accepted device=%s sala=%s aula=%s bytes=%d queue_len=%d",
         x_device_id,
-        lesson.locale_id,
-        lesson.id,
+        aula.sala_id,
+        aula.id,
         len(body),
         queue_len,
     )

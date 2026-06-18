@@ -13,7 +13,7 @@ REDIS_HOST = os.getenv("REDIS_HOST")
 REDIS_PORT = int(os.getenv("REDIS_PORT"))
 
 QUEUE_KEY = "queue:frames"
-ATTENDANCE_QUEUE_KEY = "queue:attendance_events"
+ATTENDANCE_QUEUE_KEY = "queue:eventos_presenca"
 EMBEDDINGS_KEY = "face:embeddings"
 
 
@@ -35,15 +35,15 @@ class Storage:
         _, item_raw = item
         return msgpack.unpackb(item_raw, raw=False)
 
-    def load_embeddings_for_lesson(
-        self, lesson_id: str
+    def load_embeddings_for_aula(
+        self, aula_id: str
     ) -> list[tuple[str, str, np.ndarray]]:
-        student_ids = self.redis.smembers(f"lesson:{lesson_id}:students")
-        if not student_ids:
-            logger.info("no eligible students for lesson=%s", lesson_id)
+        aluno_ids = self.redis.smembers(f"aula:{aula_id}:alunos")
+        if not aluno_ids:
+            logger.info("no eligible alunos for aula=%s", aula_id)
             return []
 
-        eligible = {student_id.decode("utf-8") for student_id in student_ids}
+        eligible = {aluno_id.decode("utf-8") for aluno_id in aluno_ids}
         raw = self.redis.hgetall(EMBEDDINGS_KEY)
 
         result = []
@@ -52,27 +52,27 @@ class Storage:
                 continue
             if isinstance(embedding_id, bytes):
                 embedding_id = embedding_id.decode("utf-8")
-            student_id, embedding = self._decode_embedding_record(emb_blob)
-            if student_id in eligible:
-                result.append((embedding_id, student_id, embedding))
+            aluno_id, embedding = self._decode_embedding_record(emb_blob)
+            if aluno_id in eligible:
+                result.append((embedding_id, aluno_id, embedding))
 
         logger.info(
-            "loaded %d eligible embeddings for lesson=%s", len(result), lesson_id
+            "loaded %d eligible embeddings for aula=%s", len(result), aula_id
         )
         return result
 
     def enqueue_attendance_event(
         self,
-        device_id: str,
-        lesson_id: str,
-        student_id: str,
+        dispositivo_id: str,
+        aula_id: str,
+        aluno_id: str,
         score: float,
     ) -> None:
         payload = {
             "eventId": str(uuid4()),
-            "deviceId": device_id,
-            "lessonId": lesson_id,
-            "studentId": student_id,
+            "dispositivoId": dispositivo_id,
+            "aulaId": aula_id,
+            "alunoId": aluno_id,
             "score": score,
             "recognizedAt": datetime.now(timezone.utc).isoformat(),
         }
@@ -92,4 +92,4 @@ class Storage:
 
     def _decode_embedding_record(self, blob: bytes) -> tuple[str, np.ndarray]:
         payload = msgpack.unpackb(blob, raw=False)
-        return payload["studentId"], self._decode_embedding(payload["embedding"])
+        return payload["alunoId"], self._decode_embedding(payload["embedding"])

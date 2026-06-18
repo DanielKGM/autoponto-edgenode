@@ -21,34 +21,34 @@ def process_frame(
     recognition: RecognitionService,
     logger,
 ) -> bool:
-    device_id = item["deviceId"]
-    locale_id = item.get("localeId")
-    lesson_id = item.get("lessonId")
+    dispositivo_id = item["dispositivoId"]
+    sala_id = item.get("salaId")
+    aula_id = item.get("aulaId")
     received_at = item.get("receivedAt")
     frame_bytes = item["frame"]
 
-    if not lesson_id:
+    if not aula_id:
         logger.info(
-            "frame ignored device=%s reason=missing_lesson lesson=%s",
-            device_id,
-            lesson_id,
+            "frame ignored dispositivo=%s reason=missing_aula aula=%s",
+            dispositivo_id,
+            aula_id,
         )
         return False
 
     logger.info(
-        "frame received device=%s locale=%s lesson=%s bytes=%d receivedAt=%s",
-        device_id,
-        locale_id,
-        lesson_id,
+        "frame received dispositivo=%s sala=%s aula=%s bytes=%d receivedAt=%s",
+        dispositivo_id,
+        sala_id,
+        aula_id,
         len(frame_bytes),
         received_at,
     )
 
-    result = recognition.recognize(frame_bytes, lesson_id)
+    result = recognition.recognize(frame_bytes, aula_id)
     if not result["ok"]:
         logger.info(
-            "recognition failed device=%s reason=%s score=%s %s",
-            device_id,
+            "recognition failed dispositivo=%s reason=%s score=%s %s",
+            dispositivo_id,
             result["reason"],
             result.get("score"),
             result.get("embeddingId"),
@@ -56,15 +56,15 @@ def process_frame(
         return False
 
     storage.enqueue_attendance_event(
-        device_id=device_id,
-        lesson_id=lesson_id,
-        student_id=result["studentId"],
+        dispositivo_id=dispositivo_id,
+        aula_id=aula_id,
+        aluno_id=result["alunoId"],
         score=result["score"],
     )
     logger.info(
-        "recognition success queued_attendance device=%s student=%s embedding_id=%s score=%.4f",
-        device_id,
-        result["studentId"],
+        "recognition success queued_attendance dispositivo=%s aluno=%s embedding_id=%s score=%.4f",
+        dispositivo_id,
+        result["alunoId"],
         result.get("embeddingId"),
         result["score"],
     )
