@@ -117,6 +117,56 @@ Redis e fila/cache, nao fonte duravel.
 - `dispositivo:{dispositivo_id}:status`: ultimo status MQTT recebido.
 - `dispositivos:last_seen`: hash simples de ultimo visto por dispositivo.
 
+Exemplos de estrutura:
+
+```text
+queue:frames
+tipo: list
+valor: msgpack({
+  "dispositivoId": "dispositivo-uuid",
+  "salaId": "sala-uuid",
+  "aulaId": "aula-uuid",
+  "receivedAt": "2026-06-18T20:10:00.000000+00:00",
+  "frame": "<jpeg-bytes>"
+})
+
+queue:eventos_presenca
+tipo: list
+valor: msgpack({
+  "eventId": "evento-local-uuid",
+  "dispositivoId": "dispositivo-uuid",
+  "aulaId": "aula-uuid",
+  "alunoId": "aluno-uuid",
+  "score": 0.72,
+  "recognizedAt": "2026-06-18T20:10:03.000000+00:00"
+})
+
+face:embeddings
+tipo: hash
+campo: "embedding-uuid"
+valor: msgpack({
+  "alunoId": "aluno-uuid",
+  "embedding": "<blob-msgpack-do-vetor>"
+})
+
+aula:aula-uuid:alunos
+tipo: set
+membros: "aluno-uuid-1", "aluno-uuid-2"
+
+dispositivo:dispositivo-uuid:status
+tipo: string
+valor: {
+  "dispositivoId": "dispositivo-uuid",
+  "status": "working",
+  "reportadoEm": "2026-06-18T20:10:00.000000+00:00"
+}
+
+dispositivos:last_seen
+tipo: hash
+campo: "dispositivo-uuid"
+valor: "2026-06-18T20:10:00.000000+00:00"
+```
+
 ## API Local Para ESP32
 
 ### `GET /context`
