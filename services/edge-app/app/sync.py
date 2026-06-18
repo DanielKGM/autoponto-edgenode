@@ -19,6 +19,22 @@ def _headers() -> dict[str, str]:
     return headers
 
 
+def _raise_for_status(response, operation: str) -> None:
+    try:
+        response.raise_for_status()
+    except Exception:
+        body = getattr(response, "text", "")
+        if len(body) > 1000:
+            body = f"{body[:1000]}..."
+        logger.warning(
+            "sync %s failed status=%s body=%s",
+            operation,
+            getattr(response, "status_code", "unknown"),
+            body,
+        )
+        raise
+
+
 def _embedding_blob(value) -> bytes:
     if isinstance(value, str):
         return base64.b64decode(value)
@@ -198,7 +214,7 @@ async def _push_device_statuses(client) -> None:
         headers=_headers(),
         json={"node_id": NODE_ID, "devices": statuses},
     )
-    response.raise_for_status()
+    _raise_for_status(response, "device status push")
 
 
 async def sync_once() -> None:
@@ -216,7 +232,7 @@ async def sync_once() -> None:
                 "cursors": msgpack.packb(_current_cursors()).hex(),
             },
         )
-        pull.raise_for_status()
+        _raise_for_status(pull, "pull")
         apply_pull_payload(pull.json())
 
         await _push_device_statuses(client)
@@ -228,7 +244,7 @@ async def sync_once() -> None:
                 headers=_headers(),
                 json={"node_id": NODE_ID, "events": pending},
             )
-            push.raise_for_status()
+            _raise_for_status(push, "attendance push")
             synced_ids = push.json().get(
                 "synced_ids",
                 [event["id"] for event in pending],
