@@ -19,6 +19,7 @@ CREATE TABLE IF NOT EXISTS dispositivos (
   sala_id TEXT NOT NULL,
   ativo INTEGER NOT NULL DEFAULT 1,
   status TEXT,
+  interscity_uuid TEXT,
   FOREIGN KEY (sala_id) REFERENCES salas(id)
 );
 
@@ -35,8 +36,7 @@ CREATE TABLE IF NOT EXISTS aulas (
 CREATE TABLE IF NOT EXISTS alunos (
   id TEXT PRIMARY KEY,
   matricula TEXT NOT NULL,
-  nome TEXT NOT NULL,
-  ativo INTEGER NOT NULL DEFAULT 1
+  nome TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS matriculas_aula (
@@ -78,10 +78,25 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_eventos_presenca_aluno_aula
 """
 
 
+def _ensure_column(
+    conn: sqlite3.Connection,
+    table: str,
+    column: str,
+    definition: str,
+) -> None:
+    columns = {
+        row["name"]
+        for row in conn.execute(f"PRAGMA table_info({table})").fetchall()
+    }
+    if column not in columns:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+
+
 def init_db() -> None:
     SQLITE_PATH.parent.mkdir(parents=True, exist_ok=True)
     with connect() as conn:
         conn.executescript(SCHEMA)
+        _ensure_column(conn, "dispositivos", "interscity_uuid", "TEXT")
 
 
 def connect() -> sqlite3.Connection:

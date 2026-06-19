@@ -1,12 +1,17 @@
 import asyncio
+import argparse
 import base64
 import logging
 
 import msgpack
 
-from app.config import MAIN_API_TOKEN, MAIN_API_URL, NODE_ID, SYNC_INTERVAL_SECONDS
-from app.db import connect, transaction
-from app.redis_store import iter_device_statuses
+from app.config import (
+    AUTOPONTO_API_TOKEN,
+    AUTOPONTO_API_URL,
+    NODE_ID,
+    SYNC_INTERVAL_SECONDS,
+)
+from app.db import connect, init_db, transaction
 from app.repository import rebuild_runtime_cache
 
 logger = logging.getLogger(__name__)
@@ -19,12 +24,13 @@ SYNC_ENTITIES = (
     "matriculas_aula",
     "embeddings_faciais",
 )
+RUNTIME_CACHE_ENTITIES = ("aulas", "alunos", "matriculas_aula", "embeddings_faciais")
 
 
 def _headers() -> dict[str, str]:
     headers = {"X-Node-Id": NODE_ID}
-    if MAIN_API_TOKEN:
-        headers["Authorization"] = f"NodeToken {MAIN_API_TOKEN}"
+    if AUTOPONTO_API_TOKEN:
+        headers["Authorization"] = f"NodeToken {AUTOPONTO_API_TOKEN}"
     return headers
 
 
@@ -80,6 +86,7 @@ def _dispositivo_row(item: dict) -> dict:
         "sala_id": item["sala_id"],
         "ativo": int(item.get("ativo", True)),
         "status": item.get("status"),
+        "interscity_uuid": item.get("interscity_uuid"),
     }
 
 
@@ -99,7 +106,6 @@ def _aluno_row(item: dict) -> dict:
         "id": item["id"],
         "matricula": item.get("matricula") or item["id"],
         "nome": item["nome"],
-        "ativo": int(item.get("ativo", True)),
     }
 
 
@@ -143,15 +149,22 @@ def _save_cursors(conn, cursors: dict) -> None:
         )
 
 
+def _has_runtime_cache_changes(data: dict, deleted: dict) -> bool:
+    return any(data.get(entity) for entity in RUNTIME_CACHE_ENTITIES) or any(
+        deleted.get(entity) for entity in RUNTIME_CACHE_ENTITIES
+    )
+
+
 def apply_pull_payload(payload: dict) -> None:
     data = payload.get("data", payload)
     deleted = payload.get("deleted", {})
+    should_rebuild_cache = _has_runtime_cache_changes(data, deleted)
     upserts = (
         ("salas", [_sala_row(item) for item in data.get("salas", [])], ["id", "nome"]),
         (
             "dispositivos",
             [_dispositivo_row(item) for item in data.get("dispositivos", [])],
-            ["id", "sala_id", "ativo", "status"],
+            ["id", "sala_id", "ativo", "status", "interscity_uuid"],
         ),
         (
             "aulas",
@@ -161,7 +174,7 @@ def apply_pull_payload(payload: dict) -> None:
         (
             "alunos",
             [_aluno_row(item) for item in data.get("alunos", [])],
-            ["id", "matricula", "nome", "ativo"],
+            ["id", "matricula", "nome"],
         ),
     )
 
@@ -194,10 +207,13 @@ def apply_pull_payload(payload: dict) -> None:
         _apply_deletions(conn, deleted)
         _save_cursors(conn, payload.get("cursors", {}))
 
-    rebuild_runtime_cache()
+    if should_rebuild_cache:
+        rebuild_runtime_cache()
 
 
-def _current_cursors() -> dict[str, str]:
+def _current_cursors(force_full: bool = False) -> dict[str, str]:
+    if force_full:
+        return {}
     with connect() as conn:
         rows = conn.execute("SELECT entity, cursor FROM sync_state").fetchall()
         return {
@@ -237,43 +253,28 @@ def _mark_synced(ids: list[str]) -> None:
         )
 
 
-async def _push_device_statuses(client) -> None:
-    statuses = iter_device_statuses()
-    if not statuses:
-        return
-
-    response = await client.post(
-        f"{MAIN_API_URL}/edge/devices/status",
-        headers=_headers(),
-        json={"node_id": NODE_ID, "dispositivos": statuses},
-    )
-    _raise_for_status(response, "device status push")
-
-
-async def sync_once() -> None:
-    if not MAIN_API_URL:
+async def sync_once(force_full: bool = False) -> None:
+    if not AUTOPONTO_API_URL:
         return
 
     import httpx
 
     async with httpx.AsyncClient(timeout=20) as client:
         pull = await client.get(
-            f"{MAIN_API_URL}/edge/pull",
+            f"{AUTOPONTO_API_URL}/edge/pull",
             headers=_headers(),
             params={
                 "node_id": NODE_ID,
-                "cursors": msgpack.packb(_current_cursors()).hex(),
+                "cursors": msgpack.packb(_current_cursors(force_full)).hex(),
             },
         )
         _raise_for_status(pull, "pull")
         apply_pull_payload(pull.json())
 
-        await _push_device_statuses(client)
-
         pending = _pending_attendance()
         if pending:
             push = await client.post(
-                f"{MAIN_API_URL}/edge/attendance",
+                f"{AUTOPONTO_API_URL}/edge/attendance",
                 headers=_headers(),
                 json={"node_id": NODE_ID, "eventos": pending},
             )
@@ -296,3 +297,24 @@ async def run_sync_loop(stop_event: asyncio.Event) -> None:
             await asyncio.wait_for(stop_event.wait(), timeout=SYNC_INTERVAL_SECONDS)
         except asyncio.TimeoutError:
             pass
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Run one AutoPonto sync cycle.")
+    parser.add_argument(
+        "--full",
+        action="store_true",
+        help="send empty cursors and ask the API for a full pull",
+    )
+    args = parser.parse_args()
+
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s %(levelname)s %(name)s - %(message)s",
+    )
+    init_db()
+    asyncio.run(sync_once(force_full=args.full))
+
+
+if __name__ == "__main__":
+    main()

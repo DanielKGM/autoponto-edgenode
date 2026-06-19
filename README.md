@@ -5,14 +5,15 @@ Computacao de borda para Raspberry Pi do AutoPonto.
 O node conversa com:
 
 - ESP32 via HTTP e MQTT local;
-- servidor principal via polling autenticado;
+- API principal AutoPonto via polling autenticado;
+- plataforma InterSCity via Resource Adaptor;
 - modelos ONNX locais para deteccao e reconhecimento facial.
 
 ## Arquitetura
 
 Containers ativos:
 
-- `edge-app`: API HTTP, MQTT local, SQLite, sincronizacao e persistencia de presenca.
+- `edge-app`: API HTTP, MQTT local, SQLite, sincronizacao, telemetria e persistencia de presenca.
 - `face-worker`: OpenCV/ONNX, reconhecimento facial e emissao de evento positivo.
 - `redis`: filas e cache quente reconstruivel.
 - `mosquitto`: broker MQTT local para os ESP32.
@@ -20,12 +21,13 @@ Containers ativos:
 ```mermaid
 flowchart LR
   ESP32[ESP32] -->|GET /context<br/>POST /frame| EdgeApp[edge-app]
-  ESP32 <-->|MQTT sts/cmd| Mosquitto[mosquitto]
-  EdgeApp <-->|status e comando| Mosquitto
+  ESP32 <-->|MQTT sts/log/cmd| Mosquitto[mosquitto]
+  EdgeApp <-->|status, logs e comando| Mosquitto
   EdgeApp <-->|filas e cache| Redis[redis]
   FaceWorker[face-worker] <-->|frames, embeddings, eventos| Redis
   EdgeApp --> SQLite[(SQLite)]
-  EdgeApp <-->|polling| MainAPI[referencia-api]
+  EdgeApp <-->|pull/push presencas| AutoPonto[API AutoPonto]
+  EdgeApp -->|telemetria| InterSCity[InterSCity Resource Adaptor]
 ```
 
 ## Modelo Local
@@ -36,14 +38,15 @@ O edge nao replica o modelo academico completo da API principal. Ele guarda so o
 - descobrir a aula atual da sala;
 - validar se o aluno pertence a aula;
 - reconhecer rostos por embeddings;
-- registrar uma presenca valida e sincronizavel.
+- registrar uma presenca valida e sincronizavel;
+- armazenar o UUID InterSCity do dispositivo quando existir.
 
 Tabelas SQLite:
 
 - `salas`: `id`, `nome`
-- `dispositivos`: `id`, `sala_id`, `ativo`, `status`
+- `dispositivos`: `id`, `sala_id`, `ativo`, `status`, `interscity_uuid`
 - `aulas`: `id`, `nome`, `sala_id`, `inicio`, `fim`, `status`
-- `alunos`: `id`, `matricula`, `nome`, `ativo`
+- `alunos`: `id`, `matricula`, `nome`
 - `matriculas_aula`: `aula_id`, `aluno_id`
 - `embeddings_faciais`: `id`, `aluno_id`, `vetor`
 - `eventos_presenca`: `id`, `aluno_id`, `aula_id`, `dispositivo_id`, `reconhecido_em`, `score`, `sync_status`
@@ -71,6 +74,7 @@ erDiagram
     string sala_id FK
     boolean ativo
     string status
+    string interscity_uuid
   }
   AULAS {
     string id PK
@@ -84,7 +88,6 @@ erDiagram
     string id PK
     string matricula
     string nome
-    boolean ativo
   }
   MATRICULAS_AULA {
     string aula_id PK,FK
@@ -250,14 +253,14 @@ Payload MQTT positivo:
 
 Nao ha MQTT negativo. Falha de decode, sem rosto, aluno desconhecido ou aluno fora da aula atual apenas gera log.
 
-## Sincronizacao Com A API Principal
+## Sincronizacao Com A API AutoPonto
 
-Se `MAIN_API_URL` estiver vazio, o edge opera offline.
+Se `AUTOPONTO_API_URL` estiver vazio, o edge opera offline e nao tenta sincronizar com a API principal.
 
 Autenticacao:
 
 ```http
-Authorization: NodeToken <MAIN_API_TOKEN>
+Authorization: NodeToken <AUTOPONTO_API_TOKEN>
 X-Node-Id: <NODE_ID>
 ```
 
@@ -306,17 +309,19 @@ Cursores:
 - Cada entidade tem cursor proprio, por exemplo `aulas`, `alunos` e `embeddings_faciais`.
 - O cursor deve ser tratado como opaco pelo edge; normalmente sera um timestamp/versao controlado pela API principal.
 - Se um cursor for apagado localmente, aquela entidade volta a fazer sync completo no proximo pull.
+- O servico faz sync incremental por `SYNC_INTERVAL_SECONDS`.
+- Pull completo deve ser acionado por comando manual ou tarefa agendada, enviando cursores vazios sem apagar dados locais.
 
 Campos por recurso:
 
 - `salas`: `id`, `nome`
-- `dispositivos`: `id`, `sala_id`, `ativo`, `status`
+- `dispositivos`: `id`, `sala_id`, `ativo`, `status`, `interscity_uuid`
 - `aulas`: `id`, `nome`, `sala_id`, `inicio`, `fim`, `status`
-- `alunos`: `id`, `matricula`, `nome`, `ativo`
+- `alunos`: `id`, `matricula`, `nome`
 - `matriculas_aula`: `aula_id`, `aluno_id`
 - `embeddings_faciais`: `id`, `aluno_id`, `vetor`
 
-O edge aplica o pull em transacao SQLite e depois reconstrui o cache Redis.
+O edge aplica o pull em transacao SQLite. O cache Redis so e reconstruido quando o pull traz alteracoes ou delecoes em `aulas`, `alunos`, `matriculas_aula` ou `embeddings_faciais`.
 
 ### Push De Presencas
 
@@ -352,45 +357,146 @@ Resposta esperada:
 }
 ```
 
-### Push De Status Dos ESP32
-
-O ESP32 publica localmente em `sts/{dispositivo_id}`: `offline`, `working` ou `idle`.
-
-Endpoint:
-
-```http
-POST /edge/devices/status
-```
-
-Payload:
-
-```json
-{
-  "node_id": "NO-CCET-01",
-  "dispositivos": [
-    {
-      "dispositivo_id": "dispositivo-uuid",
-      "status": "working",
-      "reportado_em": "2026-06-18T11:42:00Z"
-    }
-  ]
-}
-```
-
 ```mermaid
 flowchart TD
-  Timer[intervalo de sync] --> Cursors[ler sync_state]
+  Timer[intervalo incremental] --> Cursors[ler sync_state]
+  Cron[tarefa agendada full sync] --> Empty[usar cursores vazios]
   Cursors --> Pull[GET /edge/pull]
+  Empty --> Pull
   Pull --> Tx[aplicar SQLite em transacao]
-  Tx --> Cache[reconstruir Redis]
-  Cache --> Status[POST /edge/devices/status]
-  Status --> Pending[buscar eventos_presenca pending]
+  Tx --> Changed{mudou runtime cache?}
+  Changed -->|sim| Cache[reconstruir Redis]
+  Changed -->|nao| Pending[buscar eventos_presenca pending]
+  Cache --> Pending
   Pending --> Push[POST /edge/attendance]
   Push --> Confirm{confirmou ids?}
   Confirm -->|sim| Synced[marcar sync_status=synced]
   Confirm -->|nao| Retry[manter pending]
   Synced --> Timer
   Retry --> Timer
+```
+
+### Sync Manual
+
+O comando manual para um ciclo incremental e:
+
+```bash
+docker compose exec -T edge-app python -m app.sync
+```
+
+O comando manual para um pull completo, usando cursores vazios, e:
+
+```bash
+docker compose exec -T edge-app python -m app.sync --full
+```
+
+O agendamento recomendado desse comando fica na secao de setup.
+
+## Telemetria InterSCity
+
+Status e logs dos ESP32 nao sao enviados para a API AutoPonto. O edge publica diretamente no Resource Adaptor do InterSCity quando:
+
+- `INTERSCITY_API_URL` e `RESOURCE_ADAPTOR_PATH` estao configurados;
+- o dispositivo local tem `interscity_uuid`;
+- o Resource Adaptor aceita o recurso/capacidade.
+
+Variaveis:
+
+```env
+INTERSCITY_API_URL=https://cidadesinteligentes.lsdi.ufma.br/interscity_lh
+RESOURCE_ADAPTOR_PATH=/adaptor/resources
+```
+
+Endpoint usado:
+
+```http
+POST {INTERSCITY_API_URL}{RESOURCE_ADAPTOR_PATH}/{interscity_uuid}/data
+```
+
+`sts/{dispositivo_id}` e publicado separadamente pelo firmware e vira somente a capacidade `status`:
+
+```json
+{
+  "data": {
+    "status": [
+      {
+        "value": "working",
+        "timestamp": "2026-06-19T00:21:43.000"
+      }
+    ]
+  }
+}
+```
+
+`log/{dispositivo_id}` e publicado a cada minuto pelo firmware e vira somente estas capacidades:
+
+- `rssi`
+- `heap_min`
+- `lesson`
+- `remainingms`
+- `nextms`
+
+`state` nao e publicado em logs porque representa status. O firmware tambem deve remover `state` do payload de log.
+
+Exemplo de log convertido:
+
+```json
+{
+  "data": {
+    "rssi": [
+      {
+        "value": -62,
+        "timestamp": "2026-06-19T00:22:43.000"
+      }
+    ],
+    "heap_min": [
+      {
+        "value": 123456,
+        "timestamp": "2026-06-19T00:22:43.000"
+      }
+    ],
+    "lesson": [
+      {
+        "value": "AMBIENTAL",
+        "timestamp": "2026-06-19T00:22:43.000"
+      }
+    ],
+    "remainingms": [
+      {
+        "value": 60000,
+        "timestamp": "2026-06-19T00:22:43.000"
+      }
+    ],
+    "nextms": [
+      {
+        "value": 0,
+        "timestamp": "2026-06-19T00:22:43.000"
+      }
+    ]
+  }
+}
+```
+
+Se InterSCity estiver indisponivel ou os recursos/capacidades ainda nao existirem, o edge apenas registra warning e continua operando localmente.
+Para testes sem recursos/capacidades cadastrados, deixe `INTERSCITY_API_URL` vazio ou nao envie `interscity_uuid` no pull dos dispositivos.
+
+```mermaid
+sequenceDiagram
+  autonumber
+  participant ESP as ESP32
+  participant MQ as mosquitto
+  participant API as edge-app
+  participant DB as SQLite
+  participant IS as InterSCity
+
+  ESP->>MQ: publish sts/{dispositivo_id}
+  MQ->>API: status
+  API->>DB: buscar interscity_uuid
+  API->>IS: POST capacidade status
+  ESP->>MQ: publish log/{dispositivo_id} a cada 1 min
+  MQ->>API: rssi, heap_min, lesson, remainingms, nextms
+  API->>DB: buscar interscity_uuid
+  API->>IS: POST capacidades de log
 ```
 
 ## Reset De Dados Local
@@ -423,6 +529,25 @@ docker compose up -d --build
 docker compose ps
 ```
 
+### Agendamento Do Sync Completo
+
+Depois de subir a stack, agende um pull completo diario no host da Raspberry Pi. O sync incremental continua rodando dentro do `edge-app` por `SYNC_INTERVAL_SECONDS`; este cron serve apenas para forcar um pull completo com cursores vazios.
+
+Crie o diretorio de logs e edite o crontab do usuario que executa Docker:
+
+```bash
+mkdir -p data/logs
+crontab -e
+```
+
+Exemplo para executar todo dia as 03:15:
+
+```cron
+15 3 * * * cd /home/daniel/autoponto-edgenode && docker compose exec -T edge-app python -m app.sync --full >> data/logs/full-sync.log 2>&1
+```
+
+Ajuste o caminho do repositorio se ele estiver em outro diretorio. Se a API AutoPonto estiver offline, o comando falha sem apagar o SQLite/Redis local; o sync incremental normal continua tentando depois.
+
 ## Modelos ONNX
 
 ```bash
@@ -430,52 +555,11 @@ wget https://github.com/opencv/opencv_zoo/raw/main/models/face_detection_yunet/f
 wget https://github.com/opencv/opencv_zoo/raw/main/models/face_recognition_sface/face_recognition_sface_2021dec.onnx -O ./data/models/face_recognition_sface.onnx
 ```
 
-## Mudancas Necessarias Na `referencia-api`
+## Prompts De Referencia
 
-Arquivos principais:
+As alteracoes esperadas na API principal e no firmware ficam em documentos separados, em formato de prompt para LLM:
 
-- `api/services/sincronizacao_borda.py`
-- `api/views/edge_contract.py`
-- `api/urls.py`
-- testes de integracao do contrato edge, se existirem
+- [docs/prompt-referencia-api.md](docs/prompt-referencia-api.md)
+- [docs/prompt-referencia-firmware.md](docs/prompt-referencia-firmware.md)
 
-Alteracoes em `api/services/sincronizacao_borda.py`:
-
-- Trocar `ENTIDADES_SYNC` para:
-  - `salas`
-  - `dispositivos`
-  - `aulas`
-  - `alunos`
-  - `matriculas_aula`
-  - `embeddings_faciais`
-- Em `montar_payload_pull`, enviar:
-  - `salas`: derivadas de `Sala`, somente `id`, `nome`;
-  - `dispositivos`: derivados de `DispositivoEsp32`, somente `id`, `sala_id`, `ativo`, `status`;
-  - `aulas`: derivadas de `Aula`, somente `id`, `nome`, `sala_id`, `inicio`, `fim`, `status`;
-  - `alunos`: derivados de `Usuario`, somente `id`, `matricula`, `nome`, `ativo`;
-  - `matriculas_aula`: projecao de `MatriculaTurma` para cada `Aula`, somente `aula_id`, `aluno_id`;
-  - `embeddings_faciais`: derivados de `EmbeddingFacial`, somente `id`, `aluno_id`, `vetor`.
-- Em `deleted`, usar as mesmas chaves acima.
-- Em `cursors`, usar as mesmas chaves acima.
-- Em `receber_presencas_borda`, trocar `events` por `eventos` e campos:
-  - `student_id` -> `aluno_id`
-  - `lesson_id` -> `aula_id`
-  - `device_id` -> `dispositivo_id`
-  - `recognized_at` -> `reconhecido_em`
-- Em `atualizar_status_dispositivos_borda`, trocar `devices` por `dispositivos` e campos:
-  - `device_id` -> `dispositivo_id`
-  - `reported_at` -> `reportado_em`
-
-Alteracoes em `api/views/edge_contract.py`:
-
-- Atualizar schemas/exemplos OpenAPI para os novos nomes de payload.
-- Manter autenticacao `NodeToken`.
-
-Alteracoes em `api/urls.py`:
-
-- Os paths podem continuar iguais:
-  - `GET /edge/pull`
-  - `POST /edge/attendance`
-  - `POST /edge/devices/status`
-
-O backend deve continuar validando posse do dispositivo pelo `NoBorda`, sala da aula, matricula ativa, janela `inicio/fim` e status da aula.
+Os diretorios `referencia-api/` e `referencia-firmware/` sao apenas referencia local e nao devem ser editados por este projeto.

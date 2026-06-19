@@ -12,6 +12,7 @@ class Dispositivo(BaseModel):
     sala_id: str
     ativo: bool = True
     status: str | None = None
+    interscity_uuid: str | None = None
 
 
 class Aula(BaseModel):
@@ -27,7 +28,6 @@ class Aluno(BaseModel):
     id: str
     matricula: str
     nome: str
-    ativo: bool = True
 
 
 class MatriculaAula(BaseModel):

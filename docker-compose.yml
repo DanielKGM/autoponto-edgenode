@@ -47,9 +47,11 @@ services:
       LOG_LEVEL: "${LOG_LEVEL:-INFO}"
       SQLITE_PATH: "/data/db.sql"
       NODE_ID: "${NODE_ID:-edge-node}"
-      MAIN_API_URL: "${MAIN_API_URL:-}"
-      MAIN_API_TOKEN: "${MAIN_API_TOKEN:-}"
+      AUTOPONTO_API_URL: "${AUTOPONTO_API_URL:-}"
+      AUTOPONTO_API_TOKEN: "${AUTOPONTO_API_TOKEN:-}"
       SYNC_INTERVAL_SECONDS: "${SYNC_INTERVAL_SECONDS:-60}"
+      INTERSCITY_API_URL: "${INTERSCITY_API_URL:-}"
+      RESOURCE_ADAPTOR_PATH: "${RESOURCE_ADAPTOR_PATH:-/adaptor/resources}"
     volumes:
       - ${EDGE_DATA_DIR:-./data/db}:/data
     depends_on:

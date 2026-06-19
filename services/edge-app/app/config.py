@@ -22,6 +22,11 @@ LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 
 SQLITE_PATH = Path(os.getenv("SQLITE_PATH", "/data/db.sql"))
 NODE_ID = os.getenv("NODE_ID", "edge-node")
-MAIN_API_URL = os.getenv("MAIN_API_URL", "").rstrip("/")
-MAIN_API_TOKEN = os.getenv("MAIN_API_TOKEN", "")
+AUTOPONTO_API_URL = os.getenv("AUTOPONTO_API_URL", "").rstrip("/")
+AUTOPONTO_API_TOKEN = os.getenv("AUTOPONTO_API_TOKEN", "")
 SYNC_INTERVAL_SECONDS = _int_env("SYNC_INTERVAL_SECONDS", 60)
+INTERSCITY_API_URL = os.getenv("INTERSCITY_API_URL", "").rstrip("/")
+RESOURCE_ADAPTOR_PATH = os.getenv(
+    "RESOURCE_ADAPTOR_PATH",
+    "/adaptor/resources",
+)

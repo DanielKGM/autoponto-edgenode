@@ -47,11 +47,11 @@ def enqueue_frame(
     return queue_length()
 
 
-def save_device_status(dispositivo_id: str, state: str) -> None:
+def save_device_status(dispositivo_id: str, status: str) -> dict:
     now = datetime.now(timezone.utc).isoformat()
     data = {
         "dispositivoId": dispositivo_id,
-        "status": state.strip().lower(),
+        "status": status.strip().lower(),
         "reportadoEm": now,
     }
     client = get_redis(decode_responses=True)
@@ -60,6 +60,7 @@ def save_device_status(dispositivo_id: str, state: str) -> None:
         json.dumps(data),
     )
     client.hset("dispositivos:last_seen", dispositivo_id, now)
+    return data
 
 
 def iter_device_statuses() -> list[dict]:

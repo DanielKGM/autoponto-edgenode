@@ -29,6 +29,17 @@ def get_sala_id_for_device(dispositivo_id: str) -> str | None:
         return row["sala_id"] if row else None
 
 
+def get_device_interscity_uuid(dispositivo_id: str) -> str | None:
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT interscity_uuid FROM dispositivos WHERE id = ?",
+            (dispositivo_id,),
+        ).fetchone()
+        if not row:
+            return None
+        return row["interscity_uuid"] or None
+
+
 def _aula_from_row(row) -> Aula:
     return Aula(
         id=row["id"],
@@ -162,10 +173,8 @@ def rebuild_runtime_cache() -> None:
         ).fetchall()
         embedding_rows = conn.execute(
             """
-            SELECT embeddings_faciais.id, embeddings_faciais.aluno_id, embeddings_faciais.vetor
+            SELECT id, aluno_id, vetor
             FROM embeddings_faciais
-            JOIN alunos ON alunos.id = embeddings_faciais.aluno_id
-            WHERE alunos.ativo = 1
             """
         ).fetchall()
 
