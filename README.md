@@ -297,6 +297,16 @@ Payload esperado:
 }
 ```
 
+Cursores:
+
+- `cursors` sao marcadores incrementais por entidade, salvos em `sync_state`.
+- Na primeira sincronizacao, o edge envia cursor vazio (`80` em msgpack-hex, equivalente a `{}`) e o backend deve retornar tudo que o node precisa.
+- Depois de aplicar o pull com sucesso, o edge salva os cursores retornados pelo backend.
+- No proximo ciclo, o edge envia esses cursores para receber apenas alteracoes posteriores.
+- Cada entidade tem cursor proprio, por exemplo `aulas`, `alunos` e `embeddings_faciais`.
+- O cursor deve ser tratado como opaco pelo edge; normalmente sera um timestamp/versao controlado pela API principal.
+- Se um cursor for apagado localmente, aquela entidade volta a fazer sync completo no proximo pull.
+
 Campos por recurso:
 
 - `salas`: `id`, `nome`
