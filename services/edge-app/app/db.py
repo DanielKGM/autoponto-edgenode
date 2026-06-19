@@ -1,5 +1,5 @@
-from collections.abc import Iterator
 from contextlib import contextmanager
+from collections.abc import Iterator
 import sqlite3
 
 from app.config import SQLITE_PATH
@@ -78,25 +78,10 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_eventos_presenca_aluno_aula
 """
 
 
-def _ensure_column(
-    conn: sqlite3.Connection,
-    table: str,
-    column: str,
-    definition: str,
-) -> None:
-    columns = {
-        row["name"]
-        for row in conn.execute(f"PRAGMA table_info({table})").fetchall()
-    }
-    if column not in columns:
-        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
-
-
 def init_db() -> None:
     SQLITE_PATH.parent.mkdir(parents=True, exist_ok=True)
     with connect() as conn:
         conn.executescript(SCHEMA)
-        _ensure_column(conn, "dispositivos", "interscity_uuid", "TEXT")
 
 
 def connect() -> sqlite3.Connection:

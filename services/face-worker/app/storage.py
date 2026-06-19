@@ -28,7 +28,7 @@ class Storage:
             health_check_interval=30,
         )
 
-    def pop_frame_blocking(self) -> dict:
+    def pop_frame_blocking(self) -> dict | None:
         item = self.redis.blpop(QUEUE_KEY, timeout=5)
         if item is None:
             return None
@@ -80,16 +80,12 @@ class Storage:
             ATTENDANCE_QUEUE_KEY, msgpack.packb(payload, use_bin_type=True)
         )
 
-    def _decode_embedding(self, blob: bytes) -> np.ndarray:
-        payload = msgpack.unpackb(blob, raw=False)
-        if isinstance(payload.get("data"), list):
-            return np.asarray(payload["data"], dtype=np.float32).reshape(
-                payload["shape"]
-            )
-        return np.frombuffer(payload["data"], dtype=np.float32).reshape(
-            payload["shape"]
-        )
-
     def _decode_embedding_record(self, blob: bytes) -> tuple[str, np.ndarray]:
-        payload = msgpack.unpackb(blob, raw=False)
-        return payload["alunoId"], self._decode_embedding(payload["embedding"])
+        record = msgpack.unpackb(blob, raw=False)
+        embedding_payload = msgpack.unpackb(record["embedding"], raw=False)
+        data = embedding_payload["data"]
+        if isinstance(data, list):
+            embedding = np.asarray(data, dtype=np.float32)
+        else:
+            embedding = np.frombuffer(data, dtype=np.float32)
+        return record["alunoId"], embedding.reshape(embedding_payload["shape"])

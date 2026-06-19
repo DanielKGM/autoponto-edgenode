@@ -49,8 +49,7 @@ class VisionEngine:
             if faces is None or len(faces) == 0:
                 return None
 
-            faces = sorted(faces, key=lambda f: float(f[14]), reverse=True)
-            return faces[0]
+            return max(faces, key=lambda face: float(face[14]))
         except Exception as exc:
             logger.exception("failed during face detection: %s", exc)
             return None
@@ -58,8 +57,7 @@ class VisionEngine:
     def extract_embedding(self, image: np.ndarray, face) -> np.ndarray | None:
         try:
             aligned = self.recognizer.alignCrop(image, face)
-            feat = self.recognizer.feature(aligned)
-            return feat
+            return self.recognizer.feature(aligned)
         except Exception as exc:
             logger.exception("failed during embedding extraction: %s", exc)
             return None

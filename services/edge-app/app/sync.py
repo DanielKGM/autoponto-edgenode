@@ -73,51 +73,6 @@ def _upsert_many(conn, table: str, rows: list[dict], columns: list[str]) -> None
     conn.executemany(sql, [tuple(row[col] for col in columns) for row in rows])
 
 
-def _sala_row(item: dict) -> dict:
-    return {
-        "id": item["id"],
-        "nome": item["nome"],
-    }
-
-
-def _dispositivo_row(item: dict) -> dict:
-    return {
-        "id": item["id"],
-        "sala_id": item["sala_id"],
-        "ativo": int(item.get("ativo", True)),
-        "status": item.get("status"),
-        "interscity_uuid": item.get("interscity_uuid"),
-    }
-
-
-def _aula_row(item: dict) -> dict:
-    return {
-        "id": item["id"],
-        "nome": item["nome"],
-        "sala_id": item["sala_id"],
-        "inicio": item["inicio"],
-        "fim": item["fim"],
-        "status": item.get("status"),
-    }
-
-
-def _aluno_row(item: dict) -> dict:
-    return {
-        "id": item["id"],
-        "matricula": item.get("matricula") or item["id"],
-        "nome": item["nome"],
-    }
-
-
-def _delete_by_ids(conn, table: str, ids: list[str]) -> None:
-    if not ids:
-        return
-    conn.executemany(
-        f"DELETE FROM {table} WHERE id = ?",
-        [(item_id,) for item_id in ids],
-    )
-
-
 def _apply_deletions(conn, deleted: dict) -> None:
     for item in deleted.get("matriculas_aula", []):
         conn.execute(
@@ -132,7 +87,12 @@ def _apply_deletions(conn, deleted: dict) -> None:
         ("alunos", "alunos"),
         ("salas", "salas"),
     ):
-        _delete_by_ids(conn, table, deleted.get(entity, []))
+        ids = deleted.get(entity, [])
+        if ids:
+            conn.executemany(
+                f"DELETE FROM {table} WHERE id = ?",
+                [(item_id,) for item_id in ids],
+            )
 
 
 def _save_cursors(conn, cursors: dict) -> None:
@@ -149,31 +109,59 @@ def _save_cursors(conn, cursors: dict) -> None:
         )
 
 
-def _has_runtime_cache_changes(data: dict, deleted: dict) -> bool:
-    return any(data.get(entity) for entity in RUNTIME_CACHE_ENTITIES) or any(
-        deleted.get(entity) for entity in RUNTIME_CACHE_ENTITIES
-    )
-
-
 def apply_pull_payload(payload: dict) -> None:
     data = payload.get("data", payload)
     deleted = payload.get("deleted", {})
-    should_rebuild_cache = _has_runtime_cache_changes(data, deleted)
-    upserts = (
-        ("salas", [_sala_row(item) for item in data.get("salas", [])], ["id", "nome"]),
+    should_rebuild_cache = any(data.get(entity) for entity in RUNTIME_CACHE_ENTITIES)
+    should_rebuild_cache = should_rebuild_cache or any(
+        deleted.get(entity) for entity in RUNTIME_CACHE_ENTITIES
+    )
+
+    upserts: tuple[tuple[str, list[dict], list[str]], ...] = (
+        (
+            "salas",
+            [{"id": item["id"], "nome": item["nome"]} for item in data.get("salas", [])],
+            ["id", "nome"],
+        ),
         (
             "dispositivos",
-            [_dispositivo_row(item) for item in data.get("dispositivos", [])],
+            [
+                {
+                    "id": item["id"],
+                    "sala_id": item["sala_id"],
+                    "ativo": int(item.get("ativo", True)),
+                    "status": item.get("status"),
+                    "interscity_uuid": item.get("interscity_uuid"),
+                }
+                for item in data.get("dispositivos", [])
+            ],
             ["id", "sala_id", "ativo", "status", "interscity_uuid"],
         ),
         (
             "aulas",
-            [_aula_row(item) for item in data.get("aulas", [])],
+            [
+                {
+                    "id": item["id"],
+                    "nome": item["nome"],
+                    "sala_id": item["sala_id"],
+                    "inicio": item["inicio"],
+                    "fim": item["fim"],
+                    "status": item.get("status"),
+                }
+                for item in data.get("aulas", [])
+            ],
             ["id", "nome", "sala_id", "inicio", "fim", "status"],
         ),
         (
             "alunos",
-            [_aluno_row(item) for item in data.get("alunos", [])],
+            [
+                {
+                    "id": item["id"],
+                    "matricula": item.get("matricula") or item["id"],
+                    "nome": item["nome"],
+                }
+                for item in data.get("alunos", [])
+            ],
             ["id", "matricula", "nome"],
         ),
     )

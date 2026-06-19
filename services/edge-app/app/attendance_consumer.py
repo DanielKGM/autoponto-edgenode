@@ -10,13 +10,9 @@ from app.repository import parse_dt, save_attendance_event
 logger = logging.getLogger(__name__)
 
 
-def first_two_names(name: str) -> str:
-    parts = name.split()
-    return " ".join(parts[:2]) or name
-
-
-def format_attendance_message(stored_event: dict) -> str:
-    aluno_nome = first_two_names(stored_event["aluno_nome"])
+def attendance_message(stored_event: dict) -> str:
+    name_parts = stored_event["aluno_nome"].split()
+    aluno_nome = " ".join(name_parts[:2]) or stored_event["aluno_nome"]
     reconhecido_em = parse_dt(stored_event["reconhecido_em"]).strftime("%H:%M")
     return f"{aluno_nome} - registrado {reconhecido_em}"
 
@@ -25,7 +21,7 @@ def handle_attendance_event(event: dict, mqtt_client) -> dict:
     stored = save_attendance_event(event)
     payload = {
         "auth": True,
-        "msg": format_attendance_message(stored),
+        "msg": attendance_message(stored),
     }
     publish_command(mqtt_client, event["dispositivoId"], payload)
     logger.info(
