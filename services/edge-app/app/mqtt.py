@@ -4,43 +4,80 @@ import logging
 import paho.mqtt.client as mqtt
 
 from app.config import MQTT_HOST, MQTT_PASS, MQTT_PORT, MQTT_USER
-from app.interscity import publish_device_log, publish_device_status
+from app.interscity import publish_device_capabilities
 from app.redis_store import save_device_status
 
 logger = logging.getLogger(__name__)
 
+LOG_CAPABILITY_KEYS = (
+    "heap_free",
+    "psram_free",
+    "now_ms",
+    "rssi",
+    "heap_min",
+    "lesson",
+    "remaining_ms",
+    "next_ms",
+)
 
-def build_status_listener() -> mqtt.Client:
-    client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id="edge-app-status")
+
+def build_mqtt_listener() -> mqtt.Client:
+    client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id="edge-app")
     client.username_pw_set(MQTT_USER, MQTT_PASS)
 
     def on_connect(client, userdata, flags, reason_code, properties=None):
-        logger.info("mqtt status listener connected rc=%s", reason_code)
-        client.subscribe("sts/+")
+        logger.info("mqtt listener connected rc=%s", reason_code)
         client.subscribe("log/+")
 
     def on_message(client, userdata, msg):
         parts = msg.topic.split("/")
-        if len(parts) != 2:
+        if len(parts) != 2 or parts[0] != "log":
             return
 
-        kind, device_id = parts
+        device_id = parts[1]
         payload = msg.payload.decode("utf-8", errors="replace").strip()
-
-        if kind == "sts":
-            data = save_device_status(device_id, payload)
-            publish_device_status(device_id, data["status"], data["reportadoEm"])
-            logger.info("device status device=%s status=%s", device_id, data["status"])
+        try:
+            data = json.loads(payload)
+        except json.JSONDecodeError:
+            logger.warning("invalid device log device=%s payload=%s", device_id, payload)
             return
 
-        if kind == "log":
-            try:
-                data = json.loads(payload)
-            except json.JSONDecodeError:
-                logger.warning("invalid device log device=%s payload=%s", device_id, payload)
+        kind = data.get("kind")
+        timestamp = data.get("timestamp") or data.get("reportadoEm")
+
+        if kind == "status":
+            status = str(data.get("status", "")).strip().lower()
+            if not status:
+                logger.warning("invalid device status log device=%s payload=%s", device_id, data)
                 return
-            publish_device_log(device_id, data)
-            logger.info("device log received device=%s", device_id)
+            saved = save_device_status(device_id, status)
+            publish_device_capabilities(
+                device_id,
+                {"status": saved["status"]},
+                timestamp or saved["reportadoEm"],
+            )
+            logger.info("device status device=%s status=%s", device_id, saved["status"])
+            return
+
+        if kind == "pir":
+            publish_device_capabilities(
+                device_id,
+                {"presenca": data.get("presenca", True)},
+                timestamp,
+            )
+            logger.info("device pir presence device=%s", device_id)
+            return
+
+        if kind == "metrics":
+            publish_device_capabilities(
+                device_id,
+                {key: data.get(key) for key in LOG_CAPABILITY_KEYS},
+                timestamp,
+            )
+            logger.info("device metrics received device=%s", device_id)
+            return
+
+        logger.warning("unknown device log kind device=%s kind=%s", device_id, kind)
 
     client.on_connect = on_connect
     client.on_message = on_message

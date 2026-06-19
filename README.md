@@ -21,8 +21,8 @@ Containers ativos:
 ```mermaid
 flowchart LR
   ESP32[ESP32] -->|GET /context<br/>POST /frame| EdgeApp[edge-app]
-  ESP32 <-->|MQTT sts/log/cmd| Mosquitto[mosquitto]
-  EdgeApp <-->|status, logs e comando| Mosquitto
+  ESP32 <-->|MQTT log/cmd| Mosquitto[mosquitto]
+  EdgeApp <-->|logs por kind e comando| Mosquitto
   EdgeApp <-->|filas e cache| Redis[redis]
   FaceWorker[face-worker] <-->|frames, embeddings, eventos| Redis
   EdgeApp --> SQLite[(SQLite)]
@@ -413,7 +413,20 @@ Endpoint usado:
 POST {INTERSCITY_API_URL}{RESOURCE_ADAPTOR_PATH}/{interscity_uuid}/data
 ```
 
-`sts/{dispositivo_id}` e publicado separadamente pelo firmware e vira somente a capacidade `status`:
+Todos os registros do firmware chegam por `log/{dispositivo_id}` em JSON com o campo `kind`.
+
+`kind=status` vira a capacidade `status`:
+
+```json
+{
+  "kind": "status",
+  "status": "working"
+}
+```
+
+No firmware, mensagens `kind=status` devem usar `retain=true`. O Last Will tambem deve usar o mesmo topico `log/{dispositivo_id}`, payload `{"kind":"status","status":"offline"}` e `retain=true`. Mensagens `kind=metrics` e `kind=pir` nao devem usar retain.
+
+Payload InterSCity gerado:
 
 ```json
 {
@@ -428,21 +441,60 @@ POST {INTERSCITY_API_URL}{RESOURCE_ADAPTOR_PATH}/{interscity_uuid}/data
 }
 ```
 
-`log/{dispositivo_id}` e publicado a cada minuto pelo firmware e vira somente estas capacidades:
+`kind=metrics` e publicado a cada minuto pelo firmware e vira somente estas capacidades:
 
+- `heap_free`
+- `psram_free`
+- `now_ms`
 - `rssi`
 - `heap_min`
 - `lesson`
-- `remainingms`
-- `nextms`
+- `remaining_ms`
+- `next_ms`
 
 `state` nao e publicado em logs porque representa status. O firmware tambem deve remover `state` do payload de log.
 
-Exemplo de log convertido:
+`kind=pir` e publicado quando o sensor PIR detectar presenca e vira a capacidade `presenca`. Esse evento nao vem da funcao periodica de metricas.
+
+Exemplo de `kind=metrics`:
+
+```json
+{
+  "kind": "metrics",
+  "heap_free": 120000,
+  "psram_free": 3000000,
+  "now_ms": 123456,
+  "rssi": -62,
+  "heap_min": 123456,
+  "lesson": "AMBIENTAL",
+  "remaining_ms": 60000,
+  "next_ms": 0
+}
+```
+
+Payload InterSCity gerado:
 
 ```json
 {
   "data": {
+    "heap_free": [
+      {
+        "value": 120000,
+        "timestamp": "2026-06-19T00:22:43.000"
+      }
+    ],
+    "psram_free": [
+      {
+        "value": 3000000,
+        "timestamp": "2026-06-19T00:22:43.000"
+      }
+    ],
+    "now_ms": [
+      {
+        "value": 123456,
+        "timestamp": "2026-06-19T00:22:43.000"
+      }
+    ],
     "rssi": [
       {
         "value": -62,
@@ -461,16 +513,40 @@ Exemplo de log convertido:
         "timestamp": "2026-06-19T00:22:43.000"
       }
     ],
-    "remainingms": [
+    "remaining_ms": [
       {
         "value": 60000,
         "timestamp": "2026-06-19T00:22:43.000"
       }
     ],
-    "nextms": [
+    "next_ms": [
       {
         "value": 0,
         "timestamp": "2026-06-19T00:22:43.000"
+      }
+    ]
+  }
+}
+```
+
+Exemplo de `kind=pir`:
+
+```json
+{
+  "kind": "pir",
+  "presenca": true
+}
+```
+
+Payload InterSCity gerado:
+
+```json
+{
+  "data": {
+    "presenca": [
+      {
+        "value": true,
+        "timestamp": "2026-06-19T00:23:10.000"
       }
     ]
   }
@@ -489,14 +565,18 @@ sequenceDiagram
   participant DB as SQLite
   participant IS as InterSCity
 
-  ESP->>MQ: publish sts/{dispositivo_id}
+  ESP->>MQ: publish log/{dispositivo_id} kind=status retain
   MQ->>API: status
   API->>DB: buscar interscity_uuid
   API->>IS: POST capacidade status
-  ESP->>MQ: publish log/{dispositivo_id} a cada 1 min
-  MQ->>API: rssi, heap_min, lesson, remainingms, nextms
+  ESP->>MQ: publish log/{dispositivo_id} kind=metrics a cada 1 min
+  MQ->>API: metricas periodicas
   API->>DB: buscar interscity_uuid
   API->>IS: POST capacidades de log
+  ESP->>MQ: publish log/{dispositivo_id} kind=pir ao detectar PIR
+  MQ->>API: presenca
+  API->>DB: buscar interscity_uuid
+  API->>IS: POST capacidade presenca
 ```
 
 ## Reset De Dados Local
