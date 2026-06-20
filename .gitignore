@@ -3,6 +3,8 @@
 !.env.example
 get-docker.sh
 
+tests/
+
 referencia-api/
 referencia-firmware/
 
@@ -30,6 +32,7 @@ venv/
 data/**/*
 !data/**/
 !data/models/.gitkeep
+!data/horarios_ufma_fallback.json
 
 # =========================
 # DOCKER

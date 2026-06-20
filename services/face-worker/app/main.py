@@ -1,30 +1,31 @@
 import logging
 import os
 
-from app.recognition_service import RecognitionService
-from app.storage import Storage
+from app.recognition_service import ServicoReconhecimento
+from app.storage import Armazenamento
 
 
-def configure_logging():
-    level_name = os.getenv("LOG_LEVEL", "INFO").upper()
-    level = getattr(logging, level_name, logging.INFO)
+def configurar_logs():
+    nome_nivel = os.getenv("LOG_LEVEL", "INFO").upper()
+    nivel = getattr(logging, nome_nivel, logging.INFO)
 
     logging.basicConfig(
-        level=level,
+        level=nivel,
         format="%(asctime)s %(levelname)s %(name)s - %(message)s",
     )
 
 
-def process_frame(
+def processar_frame(
     item: dict,
-    storage: Storage,
-    recognition: RecognitionService,
+    armazenamento: Armazenamento,
+    reconhecimento: ServicoReconhecimento,
     logger,
 ) -> bool:
     dispositivo_id = item["dispositivoId"]
+    dispositivo_codigo = item.get("dispositivoCodigo")
     sala_id = item.get("salaId")
     aula_id = item.get("aulaId")
-    received_at = item.get("receivedAt")
+    recebido_em = item.get("receivedAt")
     frame_bytes = item["frame"]
 
     if not aula_id:
@@ -41,52 +42,53 @@ def process_frame(
         sala_id,
         aula_id,
         len(frame_bytes),
-        received_at,
+        recebido_em,
     )
 
-    result = recognition.recognize(frame_bytes, aula_id)
-    if not result["ok"]:
+    resultado = reconhecimento.reconhecer(frame_bytes, aula_id)
+    if not resultado["ok"]:
         logger.info(
             "recognition failed dispositivo=%s reason=%s score=%s %s",
             dispositivo_id,
-            result["reason"],
-            result.get("score"),
-            result.get("embeddingId"),
+            resultado["reason"],
+            resultado.get("score"),
+            resultado.get("embeddingId"),
         )
         return False
 
-    storage.enqueue_attendance_event(
+    armazenamento.enfileirar_evento_presenca(
         dispositivo_id=dispositivo_id,
+        dispositivo_codigo=dispositivo_codigo,
         aula_id=aula_id,
-        aluno_id=result["alunoId"],
-        score=result["score"],
+        aluno_id=resultado["alunoId"],
+        score=resultado["score"],
     )
     logger.info(
         "recognition success queued_attendance dispositivo=%s aluno=%s embedding_id=%s score=%.4f",
         dispositivo_id,
-        result["alunoId"],
-        result.get("embeddingId"),
-        result["score"],
+        resultado["alunoId"],
+        resultado.get("embeddingId"),
+        resultado["score"],
     )
     return True
 
 
 def main():
-    configure_logging()
+    configurar_logs()
     logger = logging.getLogger("face-worker")
 
-    storage = Storage()
-    recognition = RecognitionService(storage)
+    armazenamento = Armazenamento()
+    reconhecimento = ServicoReconhecimento(armazenamento)
 
     logger.info("waiting for frames...")
 
     while True:
         try:
-            item = storage.pop_frame_blocking()
+            item = armazenamento.buscar_frame_bloqueante()
             if not item:
                 continue
 
-            process_frame(item, storage, recognition, logger)
+            processar_frame(item, armazenamento, reconhecimento, logger)
 
         except Exception as exc:
             logger.exception("worker loop error: %s", exc)

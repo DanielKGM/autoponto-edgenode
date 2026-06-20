@@ -1,5 +1,5 @@
-import asyncio
 import argparse
+import asyncio
 import base64
 import logging
 
@@ -8,150 +8,153 @@ from sqlalchemy import delete, select, update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
 
-from app.config import (
-    AUTOPONTO_API_TOKEN,
-    AUTOPONTO_API_URL,
-    NODE_ID,
-    SYNC_INTERVAL_SECONDS,
-)
-from app.db import SessionLocal, init_db, session_scope
-from app.db_models import Aluno, Aula, Dispositivo, EmbeddingFacial, MatriculaAula
-from app.db_models import EventoPresenca, Sala, SyncState
-from app.repository import rebuild_runtime_cache
+from app.config import AUTOPONTO_API_TOKEN, AUTOPONTO_API_URL, NODE_ID
+from app.db import SessionLocal, escopo_sessao, inicializar_banco
+from app.db_models import Aluno, Aula, Dispositivo, EmbeddingFacial
+from app.db_models import EventoPresenca, MatriculaTurma, Sala, SyncState
+from app.repository import reconstruir_cache_redis
 
 logger = logging.getLogger(__name__)
 
-SYNC_ENTITIES = (
+ENTIDADES_SINCRONIZADAS = (
     "salas",
     "dispositivos",
     "aulas",
     "alunos",
-    "matriculas_aula",
+    "matriculas_turma",
     "embeddings_faciais",
 )
-RUNTIME_CACHE_ENTITIES = ("aulas", "alunos", "matriculas_aula", "embeddings_faciais")
+ENTIDADES_CACHE_RECONHECIMENTO = (
+    "dispositivos",
+    "aulas",
+    "matriculas_turma",
+    "embeddings_faciais",
+)
+MODELOS_DO_CACHE_REPLICADO = (
+    EmbeddingFacial,
+    MatriculaTurma,
+    Aula,
+    Dispositivo,
+    Aluno,
+    Sala,
+)
 
 
-def _headers() -> dict[str, str]:
-    headers = {"X-Node-Id": NODE_ID}
+def _cabecalhos_autenticacao() -> dict[str, str]:
+    cabecalhos = {"X-Node-Id": NODE_ID}
     if AUTOPONTO_API_TOKEN:
-        headers["Authorization"] = f"NodeToken {AUTOPONTO_API_TOKEN}"
-    return headers
+        cabecalhos["Authorization"] = f"NodeToken {AUTOPONTO_API_TOKEN}"
+    return cabecalhos
 
 
-def _raise_for_status(response, operation: str) -> None:
+def _validar_resposta_http(resposta, operacao: str) -> None:
     try:
-        response.raise_for_status()
+        resposta.raise_for_status()
     except Exception:
-        body = getattr(response, "text", "")
-        if len(body) > 1000:
-            body = f"{body[:1000]}..."
+        corpo = getattr(resposta, "text", "")
+        if len(corpo) > 1000:
+            corpo = f"{corpo[:1000]}..."
         logger.warning(
             "sync %s failed status=%s body=%s",
-            operation,
-            getattr(response, "status_code", "unknown"),
-            body,
+            operacao,
+            getattr(resposta, "status_code", "unknown"),
+            corpo,
         )
         raise
 
 
-def _embedding_blob(value) -> bytes:
-    if isinstance(value, str):
-        return base64.b64decode(value)
-    if isinstance(value, list):
+def _vetor_embedding_para_blob(valor) -> bytes:
+    if isinstance(valor, str):
+        return base64.b64decode(valor)
+    if isinstance(valor, list):
         return msgpack.packb(
-            {"dtype": "float32", "shape": [1, len(value)], "data": value},
+            {"dtype": "float32", "shape": [1, len(valor)], "data": valor},
             use_bin_type=True,
         )
-    raise ValueError("unsupported embedding payload")
+    raise ValueError("payload de embedding sem suporte")
 
 
-def _active_flag(value) -> bool:
-    if isinstance(value, str):
-        return value.strip().lower() not in ("0", "false", "no", "off", "")
-    return bool(value)
+def _valor_booleano_ativo(valor) -> bool:
+    if isinstance(valor, str):
+        return valor.strip().lower() not in ("0", "false", "no", "off", "")
+    return bool(valor)
 
 
-def _upsert_many(
-    session: Session,
-    model,
-    rows: list[dict],
-    columns: list[str],
-    conflict_columns: list[str] | None = None,
+def _salvar_muitos_com_upsert(
+    sessao: Session,
+    modelo,
+    registros: list[dict],
+    colunas: list[str],
+    colunas_conflito: list[str] | None = None,
 ) -> None:
-    if not rows:
+    if not registros:
         return
 
-    conflict_columns = conflict_columns or [columns[0]]
-    stmt = sqlite_insert(model).values(rows)
-    set_values = {
-        col: getattr(stmt.excluded, col)
-        for col in columns
-        if col not in conflict_columns
+    colunas_conflito = colunas_conflito or [colunas[0]]
+    comando = sqlite_insert(modelo).values(registros)
+    valores_atualizacao = {
+        coluna: getattr(comando.excluded, coluna)
+        for coluna in colunas
+        if coluna not in colunas_conflito
     }
-    if set_values:
-        stmt = stmt.on_conflict_do_update(
-            index_elements=conflict_columns,
-            set_=set_values,
+    if valores_atualizacao:
+        comando = comando.on_conflict_do_update(
+            index_elements=colunas_conflito,
+            set_=valores_atualizacao,
         )
     else:
-        stmt = stmt.on_conflict_do_nothing(index_elements=conflict_columns)
-    session.execute(stmt)
+        comando = comando.on_conflict_do_nothing(index_elements=colunas_conflito)
+    sessao.execute(comando)
 
 
-def _insert_matriculas(session: Session, rows: list[dict]) -> None:
-    if not rows:
-        return
-    stmt = (
-        sqlite_insert(MatriculaAula)
-        .values(rows)
-        .on_conflict_do_nothing(index_elements=["aula_id", "aluno_id"])
-    )
-    session.execute(stmt)
+def _limpar_cache_replicado(sessao: Session) -> None:
+    for modelo in MODELOS_DO_CACHE_REPLICADO:
+        sessao.execute(delete(modelo))
+    sessao.execute(delete(SyncState))
 
 
-def _apply_deletions(session: Session, deleted: dict) -> None:
-    for item in deleted.get("matriculas_aula", []):
-        session.execute(
-            delete(MatriculaAula).where(
-                MatriculaAula.aula_id == item["aula_id"],
-                MatriculaAula.aluno_id == item["aluno_id"],
-            )
-        )
-
-    for model, entity in (
+def _aplicar_exclusoes(sessao: Session, removidos: dict) -> None:
+    for modelo, entidade in (
         (EmbeddingFacial, "embeddings_faciais"),
+        (MatriculaTurma, "matriculas_turma"),
         (Aula, "aulas"),
         (Dispositivo, "dispositivos"),
         (Aluno, "alunos"),
         (Sala, "salas"),
     ):
-        ids = deleted.get(entity, [])
-        if ids:
-            session.execute(delete(model).where(model.id.in_(ids)))
+        ids_removidos = removidos.get(entidade, [])
+        if ids_removidos:
+            sessao.execute(delete(modelo).where(modelo.id.in_(ids_removidos)))
 
 
-def _save_cursors(session: Session, cursors: dict) -> None:
-    rows = [
-        {"entity": entity, "cursor": str(cursor)}
-        for entity, cursor in cursors.items()
-        if entity in SYNC_ENTITIES
+def _salvar_cursores(sessao: Session, cursores: dict) -> None:
+    registros = [
+        {"entity": entidade, "cursor": str(cursor)}
+        for entidade, cursor in cursores.items()
+        if entidade in ENTIDADES_SINCRONIZADAS
     ]
-    _upsert_many(session, SyncState, rows, ["entity", "cursor"])
+    _salvar_muitos_com_upsert(sessao, SyncState, registros, ["entity", "cursor"])
 
 
-def apply_pull_payload(payload: dict) -> None:
-    data = payload.get("data", payload)
-    deleted = payload.get("deleted", {})
-    should_rebuild_cache = any(data.get(entity) for entity in RUNTIME_CACHE_ENTITIES)
-    should_rebuild_cache = should_rebuild_cache or any(
-        deleted.get(entity) for entity in RUNTIME_CACHE_ENTITIES
+def aplicar_payload_sincronizacao(
+    payload: dict, substituir_cache: bool = False
+) -> None:
+    dados = payload.get("data", payload)
+    removidos = payload.get("deleted", {})
+    deve_reconstruir_cache = substituir_cache or any(
+        dados.get(entidade) for entidade in ENTIDADES_CACHE_RECONHECIMENTO
+    )
+    deve_reconstruir_cache = deve_reconstruir_cache or any(
+        removidos.get(entidade) for entidade in ENTIDADES_CACHE_RECONHECIMENTO
     )
 
     upserts: tuple[tuple[object, list[dict], list[str]], ...] = (
         (
             Sala,
-            [{"id": item["id"], "nome": item["nome"]} for item in data.get("salas", [])],
+            [
+                {"id": item["id"], "nome": item["nome"]}
+                for item in dados.get("salas", [])
+            ],
             ["id", "nome"],
         ),
         (
@@ -159,14 +162,14 @@ def apply_pull_payload(payload: dict) -> None:
             [
                 {
                     "id": item["id"],
+                    "codigo": item["codigo"],
                     "sala_id": item["sala_id"],
-                    "ativo": _active_flag(item.get("ativo", True)),
-                    "status": item.get("status"),
-                    "interscity_uuid": item.get("interscity_uuid"),
+                    "ativo": _valor_booleano_ativo(item.get("ativo", True)),
+                    "interscity_uuid": item.get("interscity_uuid") or None,
                 }
-                for item in data.get("dispositivos", [])
+                for item in dados.get("dispositivos", [])
             ],
-            ["id", "sala_id", "ativo", "status", "interscity_uuid"],
+            ["id", "codigo", "sala_id", "ativo", "interscity_uuid"],
         ),
         (
             Aula,
@@ -174,14 +177,15 @@ def apply_pull_payload(payload: dict) -> None:
                 {
                     "id": item["id"],
                     "nome": item["nome"],
+                    "turma_id": item["turma_id"],
                     "sala_id": item["sala_id"],
                     "inicio": item["inicio"],
                     "fim": item["fim"],
                     "status": item.get("status"),
                 }
-                for item in data.get("aulas", [])
+                for item in dados.get("aulas", [])
             ],
-            ["id", "nome", "sala_id", "inicio", "fim", "status"],
+            ["id", "nome", "turma_id", "sala_id", "inicio", "fim", "status"],
         ),
         (
             Aluno,
@@ -191,147 +195,167 @@ def apply_pull_payload(payload: dict) -> None:
                     "matricula": item.get("matricula") or item["id"],
                     "nome": item["nome"],
                 }
-                for item in data.get("alunos", [])
+                for item in dados.get("alunos", [])
             ],
             ["id", "matricula", "nome"],
         ),
-    )
-
-    with session_scope() as session:
-        for model, rows, columns in upserts:
-            _upsert_many(session, model, rows, columns)
-
-        _insert_matriculas(
-            session,
+        (
+            MatriculaTurma,
             [
-                {"aula_id": item["aula_id"], "aluno_id": item["aluno_id"]}
-                for item in data.get("matriculas_aula", [])
+                {
+                    "id": item["id"],
+                    "turma_id": item["turma_id"],
+                    "aluno_id": item["aluno_id"],
+                }
+                for item in dados.get("matriculas_turma", [])
             ],
-        )
-
-        _upsert_many(
-            session,
+            ["id", "turma_id", "aluno_id"],
+        ),
+        (
             EmbeddingFacial,
             [
                 {
                     "id": item["id"],
                     "aluno_id": item["aluno_id"],
-                    "vetor": _embedding_blob(item["vetor"]),
+                    "vetor": _vetor_embedding_para_blob(item["vetor"]),
                 }
-                for item in data.get("embeddings_faciais", [])
+                for item in dados.get("embeddings_faciais", [])
             ],
             ["id", "aluno_id", "vetor"],
-        )
+        ),
+    )
 
-        _apply_deletions(session, deleted)
-        _save_cursors(session, payload.get("cursors", {}))
+    with escopo_sessao() as sessao:
+        if substituir_cache:
+            _limpar_cache_replicado(sessao)
 
-    if should_rebuild_cache:
-        rebuild_runtime_cache()
+        for modelo, registros, colunas in upserts:
+            _salvar_muitos_com_upsert(sessao, modelo, registros, colunas)
+
+        if not substituir_cache:
+            _aplicar_exclusoes(sessao, removidos)
+        _salvar_cursores(sessao, payload.get("cursors", {}))
+
+    if deve_reconstruir_cache:
+        reconstruir_cache_redis()
 
 
-def _current_cursors(force_full: bool = False) -> dict[str, str]:
-    if force_full:
-        return {}
-    with SessionLocal() as session:
-        rows = session.execute(select(SyncState.entity, SyncState.cursor)).all()
+def _cursores_atuais() -> dict[str, str]:
+    with SessionLocal() as sessao:
+        linhas = sessao.execute(select(SyncState.entity, SyncState.cursor)).all()
         return {
-            entity: cursor
-            for entity, cursor in rows
-            if entity in SYNC_ENTITIES
+            entidade: cursor
+            for entidade, cursor in linhas
+            if entidade in ENTIDADES_SINCRONIZADAS
         }
 
 
-def _pending_attendance() -> list[dict]:
-    with SessionLocal() as session:
-        rows = session.execute(
-            select(
-                EventoPresenca.id,
-                EventoPresenca.aluno_id,
-                EventoPresenca.aula_id,
-                EventoPresenca.dispositivo_id,
-                EventoPresenca.reconhecido_em,
-                EventoPresenca.score,
+def _presencas_pendentes() -> list[dict]:
+    with SessionLocal() as sessao:
+        linhas = (
+            sessao.execute(
+                select(
+                    EventoPresenca.id,
+                    EventoPresenca.aluno_id,
+                    EventoPresenca.aula_id,
+                    EventoPresenca.dispositivo_id,
+                    EventoPresenca.reconhecido_em,
+                    EventoPresenca.score,
+                )
+                .where(EventoPresenca.sync_status == "pending")
+                .order_by(EventoPresenca.reconhecido_em)
+                .limit(100)
             )
-            .where(EventoPresenca.sync_status == "pending")
-            .order_by(EventoPresenca.reconhecido_em)
-            .limit(100)
-        ).mappings().all()
-        return [dict(row) for row in rows]
+            .mappings()
+            .all()
+        )
+        return [dict(linha) for linha in linhas]
 
 
-def _mark_synced(ids: list[str]) -> None:
+def _marcar_presencas_sincronizadas(ids: list[str]) -> None:
     if not ids:
         return
-    with session_scope() as session:
-        session.execute(
+    with escopo_sessao() as sessao:
+        sessao.execute(
             update(EventoPresenca)
             .where(EventoPresenca.id.in_(ids))
             .values(sync_status="synced")
         )
 
 
-async def sync_once(force_full: bool = False) -> None:
+async def executar_sincronizacao(
+    forcar_completa: bool = False,
+    enviar_presencas: bool = True,
+) -> None:
     if not AUTOPONTO_API_URL:
         return
 
     import httpx
 
-    async with httpx.AsyncClient(timeout=20) as client:
-        pull = await client.get(
-            f"{AUTOPONTO_API_URL}/edge/pull",
-            headers=_headers(),
-            params={
-                "node_id": NODE_ID,
-                "cursors": msgpack.packb(_current_cursors(force_full)).hex(),
-            },
+    parametros = {"node_id": NODE_ID}
+    substituir_cache = forcar_completa
+    if forcar_completa:
+        parametros["full"] = "true"
+    else:
+        cursores = _cursores_atuais()
+        if set(cursores) == set(ENTIDADES_SINCRONIZADAS):
+            parametros["cursors"] = msgpack.packb(cursores).hex()
+        else:
+            parametros["full"] = "true"
+            substituir_cache = True
+
+    async with httpx.AsyncClient(timeout=20) as cliente:
+        resposta_pull = await cliente.get(
+            f"{AUTOPONTO_API_URL}/edge/pull/",
+            headers=_cabecalhos_autenticacao(),
+            params=parametros,
         )
-        _raise_for_status(pull, "pull")
-        apply_pull_payload(pull.json())
+        _validar_resposta_http(resposta_pull, "pull")
+        aplicar_payload_sincronizacao(
+            resposta_pull.json(),
+            substituir_cache=substituir_cache,
+        )
 
-        pending = _pending_attendance()
-        if pending:
-            push = await client.post(
-                f"{AUTOPONTO_API_URL}/edge/attendance",
-                headers=_headers(),
-                json={"node_id": NODE_ID, "eventos": pending},
+        presencas = _presencas_pendentes()
+        if enviar_presencas and presencas:
+            resposta_presencas = await cliente.post(
+                f"{AUTOPONTO_API_URL}/edge/attendance/",
+                headers=_cabecalhos_autenticacao(),
+                json={"node_id": NODE_ID, "eventos": presencas},
             )
-            _raise_for_status(push, "attendance push")
-            synced_ids = push.json().get(
+            _validar_resposta_http(resposta_presencas, "attendance push")
+            ids_sincronizados = resposta_presencas.json().get(
                 "synced_ids",
-                [event["id"] for event in pending],
+                [presenca["id"] for presenca in presencas],
             )
-            _mark_synced(synced_ids)
-
-
-async def run_sync_loop(stop_event: asyncio.Event) -> None:
-    while not stop_event.is_set():
-        try:
-            await sync_once()
-        except Exception as exc:
-            logger.warning("sync failed: %s", exc)
-
-        try:
-            await asyncio.wait_for(stop_event.wait(), timeout=SYNC_INTERVAL_SECONDS)
-        except asyncio.TimeoutError:
-            pass
+            _marcar_presencas_sincronizadas(ids_sincronizados)
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Run one AutoPonto sync cycle.")
+    parser = argparse.ArgumentParser(description="Executa uma sincronizacao AutoPonto.")
     parser.add_argument(
-        "--full",
+        "--completa",
         action="store_true",
-        help="send empty cursors and ask the API for a full pull",
+        help="envia full=true e solicita um pull completo da API",
     )
-    args = parser.parse_args()
+    parser.add_argument(
+        "--sem-presencas",
+        action="store_true",
+        help="nao envia presencas pendentes neste ciclo",
+    )
+    argumentos = parser.parse_args()
 
     logging.basicConfig(
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s - %(message)s",
     )
-    init_db()
-    asyncio.run(sync_once(force_full=args.full))
+    inicializar_banco()
+    asyncio.run(
+        executar_sincronizacao(
+            forcar_completa=argumentos.completa,
+            enviar_presencas=not argumentos.sem_presencas,
+        )
+    )
 
 
 if __name__ == "__main__":

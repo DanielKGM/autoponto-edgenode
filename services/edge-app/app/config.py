@@ -19,12 +19,14 @@ EDGE_SHARED_AUTH = os.getenv("EDGE_SHARED_AUTH", "replace")
 ZONE_INFO = os.getenv("ZONE_INFO", "America/Fortaleza")
 MAX_FRAME_QUEUE = _int_env("MAX_FRAME_QUEUE", 100)
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
+INTERSCITY_QUEUE_MAX = _int_env("INTERSCITY_QUEUE_MAX", 1000)
+INTERSCITY_WORKERS = _int_env("INTERSCITY_WORKERS", 1)
+INTERSCITY_TIMEOUT_SECONDS = _int_env("INTERSCITY_TIMEOUT_SECONDS", 5)
 
 SQLITE_PATH = Path(os.getenv("SQLITE_PATH", "/data/db.sql"))
 NODE_ID = os.getenv("NODE_ID", "edge-node")
 AUTOPONTO_API_URL = os.getenv("AUTOPONTO_API_URL", "").rstrip("/")
 AUTOPONTO_API_TOKEN = os.getenv("AUTOPONTO_API_TOKEN", "")
-SYNC_INTERVAL_SECONDS = _int_env("SYNC_INTERVAL_SECONDS", 60)
 INTERSCITY_API_URL = os.getenv("INTERSCITY_API_URL", "").rstrip("/")
 RESOURCE_ADAPTOR_PATH = os.getenv(
     "RESOURCE_ADAPTOR_PATH",

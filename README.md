@@ -5,7 +5,7 @@ Computacao de borda para Raspberry Pi do AutoPonto.
 O node conversa com:
 
 - ESP32 via HTTP e MQTT local;
-- API principal AutoPonto via polling autenticado;
+- API principal AutoPonto via pull/push autenticado;
 - plataforma InterSCity via Resource Adaptor;
 - modelos ONNX locais para deteccao e reconhecimento facial.
 
@@ -44,10 +44,10 @@ O edge nao replica o modelo academico completo da API principal. Ele guarda so o
 Tabelas SQLite:
 
 - `salas`: `id`, `nome`
-- `dispositivos`: `id`, `sala_id`, `ativo`, `status`, `interscity_uuid`
-- `aulas`: `id`, `nome`, `sala_id`, `inicio`, `fim`, `status`
+- `dispositivos`: `id`, `codigo`, `sala_id`, `ativo`, `interscity_uuid`
+- `aulas`: `id`, `nome`, `turma_id`, `sala_id`, `inicio`, `fim`, `status`
 - `alunos`: `id`, `matricula`, `nome`
-- `matriculas_aula`: `aula_id`, `aluno_id`
+- `matriculas_turma`: `id`, `turma_id`, `aluno_id`
 - `embeddings_faciais`: `id`, `aluno_id`, `vetor`
 - `eventos_presenca`: `id`, `aluno_id`, `aula_id`, `dispositivo_id`, `reconhecido_em`, `score`, `sync_status`
 - `sync_state`: `entity`, `cursor`
@@ -58,12 +58,11 @@ Tabelas SQLite:
 erDiagram
   SALAS ||--o{ DISPOSITIVOS : possui
   SALAS ||--o{ AULAS : recebe
-  AULAS ||--o{ MATRICULAS_AULA : permite
-  ALUNOS ||--o{ MATRICULAS_AULA : participa
+  AULAS }o--o{ MATRICULAS_TURMA : deriva_por_turma
+  ALUNOS ||--o{ MATRICULAS_TURMA : participa
   ALUNOS ||--o{ EMBEDDINGS_FACIAIS : possui
   ALUNOS ||--o{ EVENTOS_PRESENCA : gera
   AULAS ||--o{ EVENTOS_PRESENCA : recebe
-  DISPOSITIVOS ||--o{ EVENTOS_PRESENCA : registra
 
   SALAS {
     string id PK
@@ -71,14 +70,15 @@ erDiagram
   }
   DISPOSITIVOS {
     string id PK
+    string codigo UK
     string sala_id FK
     boolean ativo
-    string status
     string interscity_uuid
   }
   AULAS {
     string id PK
     string nome
+    string turma_id
     string sala_id FK
     datetime inicio
     datetime fim
@@ -89,9 +89,10 @@ erDiagram
     string matricula
     string nome
   }
-  MATRICULAS_AULA {
-    string aula_id PK,FK
-    string aluno_id PK,FK
+  MATRICULAS_TURMA {
+    string id PK
+    string turma_id
+    string aluno_id FK
   }
   EMBEDDINGS_FACIAIS {
     string id PK
@@ -115,10 +116,10 @@ Redis e fila/cache, nao fonte duravel.
 
 - `queue:frames`: frames JPEG recebidos do ESP32.
 - `queue:eventos_presenca`: eventos positivos gerados pelo `face-worker`.
+- `dispositivos:por_codigo`: hash por MAC/codigo do ESP32.
+- `sala:{sala_id}:aulas`: aulas ativas da sala, ordenadas por inicio.
 - `face:embeddings`: hash de embeddings por `embedding_id`.
 - `aula:{aula_id}:alunos`: set de alunos elegiveis para a aula.
-- `dispositivo:{dispositivo_id}:status`: ultimo status MQTT recebido.
-- `dispositivos:last_seen`: hash simples de ultimo visto por dispositivo.
 
 Exemplos de estrutura:
 
@@ -127,6 +128,7 @@ queue:frames
 tipo: list
 valor: msgpack({
   "dispositivoId": "dispositivo-uuid",
+  "dispositivoCodigo": "ESP32-LAB101",
   "salaId": "sala-uuid",
   "aulaId": "aula-uuid",
   "receivedAt": "2026-06-18T20:10:00.000000+00:00",
@@ -152,22 +154,34 @@ valor: msgpack({
   "embedding": "<blob-msgpack-do-vetor>"
 })
 
+dispositivos:por_codigo
+tipo: hash
+campo: "ESP32-LAB101"
+valor: msgpack({
+  "dispositivo_id": "dispositivo-uuid",
+  "dispositivo_codigo": "ESP32-LAB101",
+  "sala_id": "sala-uuid",
+  "ativo": true,
+  "interscity_uuid": "resource-uuid"
+})
+
+sala:sala-uuid:aulas
+tipo: string
+valor: msgpack([
+  {
+    "id": "aula-uuid",
+    "nome": "Calculo",
+    "turma_id": "turma-uuid",
+    "sala_id": "sala-uuid",
+    "inicio": "2026-06-18T20:00:00-03:00",
+    "fim": "2026-06-18T21:40:00-03:00",
+    "status": "ABERTA"
+  }
+])
+
 aula:aula-uuid:alunos
 tipo: set
 membros: "aluno-uuid-1", "aluno-uuid-2"
-
-dispositivo:dispositivo-uuid:status
-tipo: string
-valor: {
-  "dispositivoId": "dispositivo-uuid",
-  "status": "working",
-  "reportadoEm": "2026-06-18T20:10:00.000000+00:00"
-}
-
-dispositivos:last_seen
-tipo: hash
-campo: "dispositivo-uuid"
-valor: "2026-06-18T20:10:00.000000+00:00"
 ```
 
 ## API Local Para ESP32
@@ -176,7 +190,7 @@ valor: "2026-06-18T20:10:00.000000+00:00"
 
 Headers:
 
-- `X-Device-Id`
+- `X-Device-Id`: MAC/codigo do ESP32
 - `X-Auth`
 
 Resposta mantida simples para o firmware:
@@ -193,17 +207,18 @@ Resposta mantida simples para o firmware:
 
 Headers:
 
-- `X-Device-Id`
+- `X-Device-Id`: MAC/codigo do ESP32
 - `X-Auth`
 - `Content-Type: image/jpeg`
 
-O frame so entra em `queue:frames` se existir uma aula atual para a sala do dispositivo.
+O frame so entra em `queue:frames` se existir no Redis um dispositivo ativo e uma aula atual para a sala do dispositivo.
 
 Item interno da fila:
 
 ```json
 {
   "dispositivoId": "dispositivo-uuid",
+  "dispositivoCodigo": "ESP32-LAB101",
   "salaId": "sala-uuid",
   "aulaId": "aula-uuid",
   "receivedAt": "2026-06-18T12:00:00Z",
@@ -224,10 +239,10 @@ sequenceDiagram
   participant MQ as mosquitto
 
   ESP->>API: GET /context
-  API->>DB: buscar dispositivo, sala e aula atual/proxima
+  API->>R: buscar dispositivo, sala e aula atual/proxima
   API-->>ESP: lesson_name, msRemaining, msForNext
   ESP->>API: POST /frame JPEG
-  API->>DB: validar aula atual do dispositivo
+  API->>R: validar aula atual do dispositivo
   API->>R: RPUSH queue:frames com aulaId
   W->>R: BLPOP queue:frames
   W->>R: ler aula:{aulaId}:alunos e face:embeddings
@@ -236,7 +251,7 @@ sequenceDiagram
     W->>R: RPUSH queue:eventos_presenca
     API->>R: BLPOP queue:eventos_presenca
     API->>DB: INSERT OR IGNORE eventos_presenca
-    API->>MQ: publish cmd/{dispositivo_id}
+    API->>MQ: publish cmd/{dispositivo_codigo}
   else falha
     W-->>W: log sem MQTT
   end
@@ -255,7 +270,7 @@ Nao ha MQTT negativo. Falha de decode, sem rosto, aluno desconhecido ou aluno fo
 
 ## Sincronizacao Com A API AutoPonto
 
-Se `AUTOPONTO_API_URL` estiver vazio, o edge opera offline e nao tenta sincronizar com a API principal.
+O edge sincroniza dados replicados e presencas com a API principal. Horarios padrao UFMA nao sao buscados na API: o agendamento usa somente `data/horarios_ufma_fallback.json`.
 
 Autenticacao:
 
@@ -264,14 +279,12 @@ Authorization: NodeToken <AUTOPONTO_API_TOKEN>
 X-Node-Id: <NODE_ID>
 ```
 
-`NODE_ID` deve ser o `NoBorda.codigo` ou o UUID do no associado ao token.
-
 ### Pull
 
 Endpoint:
 
 ```http
-GET /edge/pull?node_id=<NODE_ID>&cursors=<msgpack-hex>
+GET /edge/pull/?node_id=<NODE_ID>&cursors=<msgpack-hex>
 ```
 
 Payload esperado:
@@ -283,7 +296,7 @@ Payload esperado:
     "dispositivos": [],
     "aulas": [],
     "alunos": [],
-    "matriculas_aula": [],
+    "matriculas_turma": [],
     "embeddings_faciais": []
   },
   "deleted": {
@@ -291,7 +304,7 @@ Payload esperado:
     "dispositivos": [],
     "aulas": [],
     "alunos": [],
-    "matriculas_aula": [],
+    "matriculas_turma": [],
     "embeddings_faciais": []
   },
   "cursors": {
@@ -303,32 +316,26 @@ Payload esperado:
 Cursores:
 
 - `cursors` sao marcadores incrementais por entidade, salvos em `sync_state`.
-- Na primeira sincronizacao, o edge envia cursor vazio (`80` em msgpack-hex, equivalente a `{}`) e o backend deve retornar tudo que o node precisa.
+- Na primeira sincronizacao ou quando faltar algum cursor, o edge envia `full=true` e substitui o cache replicado local.
 - Depois de aplicar o pull com sucesso, o edge salva os cursores retornados pelo backend.
 - No proximo ciclo, o edge envia esses cursores para receber apenas alteracoes posteriores.
-- Cada entidade tem cursor proprio, por exemplo `aulas`, `alunos` e `embeddings_faciais`.
-- O cursor deve ser tratado como opaco pelo edge; normalmente sera um timestamp/versao controlado pela API principal.
-- Se um cursor for apagado localmente, aquela entidade volta a fazer sync completo no proximo pull.
-- O servico faz sync incremental por `SYNC_INTERVAL_SECONDS`.
-- Pull completo deve ser acionado por comando manual ou tarefa agendada, enviando cursores vazios sem apagar dados locais.
+- Horarios padrao UFMA nao fazem parte de `data`, `deleted` nem `cursors`.
 
 Campos por recurso:
 
 - `salas`: `id`, `nome`
-- `dispositivos`: `id`, `sala_id`, `ativo`, `status`, `interscity_uuid`
-- `aulas`: `id`, `nome`, `sala_id`, `inicio`, `fim`, `status`
+- `dispositivos`: `id`, `codigo`, `sala_id`, `ativo`, `interscity_uuid`
+- `aulas`: `id`, `nome`, `turma_id`, `sala_id`, `inicio`, `fim`, `status`
 - `alunos`: `id`, `matricula`, `nome`
-- `matriculas_aula`: `aula_id`, `aluno_id`
+- `matriculas_turma`: `id`, `turma_id`, `aluno_id`
 - `embeddings_faciais`: `id`, `aluno_id`, `vetor`
-
-O edge aplica o pull em transacao SQLite. O cache Redis so e reconstruido quando o pull traz alteracoes ou delecoes em `aulas`, `alunos`, `matriculas_aula` ou `embeddings_faciais`.
 
 ### Push De Presencas
 
 Endpoint:
 
 ```http
-POST /edge/attendance
+POST /edge/attendance/
 ```
 
 Payload:
@@ -357,47 +364,26 @@ Resposta esperada:
 }
 ```
 
-```mermaid
-flowchart TD
-  Timer[intervalo incremental] --> Cursors[ler sync_state]
-  Cron[tarefa agendada full sync] --> Empty[usar cursores vazios]
-  Cursors --> Pull[GET /edge/pull]
-  Empty --> Pull
-  Pull --> Tx[aplicar SQLite em transacao]
-  Tx --> Changed{mudou runtime cache?}
-  Changed -->|sim| Cache[reconstruir Redis]
-  Changed -->|nao| Pending[buscar eventos_presenca pending]
-  Cache --> Pending
-  Pending --> Push[POST /edge/attendance]
-  Push --> Confirm{confirmou ids?}
-  Confirm -->|sim| Synced[marcar sync_status=synced]
-  Confirm -->|nao| Retry[manter pending]
-  Synced --> Timer
-  Retry --> Timer
-```
-
 ### Sync Manual
 
 O comando manual para um ciclo incremental e:
 
 ```bash
-docker compose exec -T edge-app python -m app.sync
+./scripts/sincronizacao-incremental-edge.sh
 ```
 
-O comando manual para um pull completo, usando cursores vazios, e:
+O comando manual para um pull completo e:
 
 ```bash
-docker compose exec -T edge-app python -m app.sync --full
+./scripts/sincronizacao-completa-edge.sh
 ```
-
-O agendamento recomendado desse comando fica na secao de setup.
 
 ## Telemetria InterSCity
 
 Status e logs dos ESP32 nao sao enviados para a API AutoPonto. O edge publica diretamente no Resource Adaptor do InterSCity quando:
 
 - `INTERSCITY_API_URL` e `RESOURCE_ADAPTOR_PATH` estao configurados;
-- o dispositivo local tem `interscity_uuid`;
+- o cache Redis do dispositivo por MAC/codigo tem `interscity_uuid`;
 - o Resource Adaptor aceita o recurso/capacidade.
 
 Variaveis:
@@ -405,6 +391,9 @@ Variaveis:
 ```env
 INTERSCITY_API_URL=https://cidadesinteligentes.lsdi.ufma.br/interscity_lh
 RESOURCE_ADAPTOR_PATH=/adaptor/resources
+INTERSCITY_QUEUE_MAX=1000
+INTERSCITY_WORKERS=1
+INTERSCITY_TIMEOUT_SECONDS=5
 ```
 
 Endpoint usado:
@@ -413,7 +402,7 @@ Endpoint usado:
 POST {INTERSCITY_API_URL}{RESOURCE_ADAPTOR_PATH}/{interscity_uuid}/data
 ```
 
-Todos os registros do firmware chegam por `log/{dispositivo_id}` em JSON com o campo `kind`.
+Todos os registros do firmware chegam por `log/{dispositivo_codigo}` em JSON com o campo `kind`. `dispositivo_codigo` e o MAC/codigo usado pelo ESP32.
 
 `kind=status` vira a capacidade `status`:
 
@@ -424,7 +413,7 @@ Todos os registros do firmware chegam por `log/{dispositivo_id}` em JSON com o c
 }
 ```
 
-No firmware, mensagens `kind=status` devem usar `retain=true`. O Last Will tambem deve usar o mesmo topico `log/{dispositivo_id}`, payload `{"kind":"status","status":"offline"}` e `retain=true`. Mensagens `kind=metrics` e `kind=pir` nao devem usar retain.
+No firmware, mensagens `kind=status` devem usar `retain=true`. O Last Will tambem deve usar o mesmo topico `log/{dispositivo_codigo}`, payload `{"kind":"status","status":"offline"}` e `retain=true`. Mensagens `kind=metrics` e `kind=pir` nao devem usar retain.
 
 Payload InterSCity gerado:
 
@@ -553,7 +542,7 @@ Payload InterSCity gerado:
 }
 ```
 
-Se InterSCity estiver indisponivel ou os recursos/capacidades ainda nao existirem, o edge apenas registra warning e continua operando localmente.
+O listener MQTT apenas enfileira a publicacao. Workers em background fazem o POST para o InterSCity. Se a fila estiver cheia ou o InterSCity estiver indisponivel, o edge registra warning e continua operando localmente.
 Para testes sem recursos/capacidades cadastrados, deixe `INTERSCITY_API_URL` vazio ou nao envie `interscity_uuid` no pull dos dispositivos.
 
 ```mermaid
@@ -562,26 +551,29 @@ sequenceDiagram
   participant ESP as ESP32
   participant MQ as mosquitto
   participant API as edge-app
-  participant DB as SQLite
+  participant R as Redis
   participant IS as InterSCity
 
-  ESP->>MQ: publish log/{dispositivo_id} kind=status retain
+  ESP->>MQ: publish log/{dispositivo_codigo} kind=status retain
   MQ->>API: status
-  API->>DB: buscar interscity_uuid
+  API->>R: enfileirar publicacao
+  API->>R: worker resolve interscity_uuid
   API->>IS: POST capacidade status
-  ESP->>MQ: publish log/{dispositivo_id} kind=metrics a cada 1 min
+  ESP->>MQ: publish log/{dispositivo_codigo} kind=metrics a cada 1 min
   MQ->>API: metricas periodicas
-  API->>DB: buscar interscity_uuid
+  API->>R: enfileirar publicacao
+  API->>R: worker resolve interscity_uuid
   API->>IS: POST capacidades de log
-  ESP->>MQ: publish log/{dispositivo_id} kind=pir ao detectar PIR
+  ESP->>MQ: publish log/{dispositivo_codigo} kind=pir ao detectar PIR
   MQ->>API: presenca
-  API->>DB: buscar interscity_uuid
+  API->>R: enfileirar publicacao
+  API->>R: worker resolve interscity_uuid
   API->>IS: POST capacidade presenca
 ```
 
 ## Reset De Dados Local
 
-Use quando mudar schema local ou contrato de sync:
+Use quando mudar o schema local ou quiser recriar o cache SQLite:
 
 ```bash
 docker compose down -v --remove-orphans
@@ -589,7 +581,7 @@ rm -f data/db/db.sql data/db/db.sql-wal data/db/db.sql-shm
 docker compose up -d --build
 ```
 
-Depois do reset, os dados locais devem vir exclusivamente de `GET /edge/pull`.
+Depois do reset, os dados locais voltam pelo proximo pull completo da API principal.
 
 ## Setup
 
@@ -609,24 +601,23 @@ docker compose up -d --build
 docker compose ps
 ```
 
-### Agendamento Do Sync Completo
+### Agendamento Do Sync
 
-Depois de subir a stack, agende um pull completo diario no host da Raspberry Pi. O sync incremental continua rodando dentro do `edge-app` por `SYNC_INTERVAL_SECONDS`; este cron serve apenas para forcar um pull completo com cursores vazios.
+O `edge-app` nao tem loop interno de sincronizacao. Use a crontab do Linux para executar sync completa no startup/virada de dia e sync incremental antes dos inicios dos horarios padrao UFMA.
 
-Crie o diretorio de logs e edite o crontab do usuario que executa Docker:
+Revise as tarefas geradas sem alterar a crontab:
 
 ```bash
-mkdir -p data/logs
-crontab -e
+./scripts/atualizar-agendamentos-sincronizacao-edge.sh --dry-run
 ```
 
-Exemplo para executar todo dia as 03:15:
+Grave ou atualize o bloco de tarefas do AutoPonto Edge:
 
-```cron
-15 3 * * * cd /home/daniel/autoponto-edgenode && docker compose exec -T edge-app python -m app.sync --full >> data/logs/full-sync.log 2>&1
+```bash
+./scripts/atualizar-agendamentos-sincronizacao-edge.sh
 ```
 
-Ajuste o caminho do repositorio se ele estiver em outro diretorio. Se a API AutoPonto estiver offline, o comando falha sem apagar o SQLite/Redis local; o sync incremental normal continua tentando depois.
+O script le `data/horarios_ufma_fallback.json` e recria somente o bloco entre `# AUTOPONTO EDGE SYNC BEGIN` e `# AUTOPONTO EDGE SYNC END`. Ele nao busca horarios padrao UFMA na API.
 
 ## Modelos ONNX
 

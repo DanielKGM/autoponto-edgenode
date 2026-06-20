@@ -1,81 +1,158 @@
 from datetime import datetime, timezone
 import json
 import logging
+from queue import Empty, Full, Queue
 from socket import timeout as SocketTimeout
+from threading import Event, Thread
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
-from app.config import INTERSCITY_API_URL, RESOURCE_ADAPTOR_PATH
-from app.repository import get_device_interscity_uuid
+from app.config import (
+    INTERSCITY_API_URL,
+    INTERSCITY_QUEUE_MAX,
+    INTERSCITY_TIMEOUT_SECONDS,
+    INTERSCITY_WORKERS,
+    RESOURCE_ADAPTOR_PATH,
+)
+from app.redis_store import obter_uuid_interscity_por_codigo
 
-logger = logging.getLogger(__name__)
-
-REQUEST_TIMEOUT_SECONDS = 5
+registrador = logging.getLogger(__name__)
 
 
-def _timestamp(value: str | None) -> str:
+def _timestamp(valor: str | None) -> str:
     try:
-        parsed = (
-            datetime.fromisoformat(value.replace("Z", "+00:00"))
-            if value
+        data_hora = (
+            datetime.fromisoformat(valor.replace("Z", "+00:00"))
+            if valor
             else datetime.now(timezone.utc)
         )
     except ValueError:
-        parsed = datetime.now(timezone.utc)
+        data_hora = datetime.now(timezone.utc)
 
-    if parsed.tzinfo is None:
-        parsed = parsed.replace(tzinfo=timezone.utc)
+    if data_hora.tzinfo is None:
+        data_hora = data_hora.replace(tzinfo=timezone.utc)
 
     return (
-        parsed.astimezone(timezone.utc)
+        data_hora.astimezone(timezone.utc)
         .replace(tzinfo=None)
         .isoformat(timespec="milliseconds")
     )
 
 
-def publish_device_capabilities(
-    dispositivo_id: str,
-    capabilities: dict,
+def publicar_capacidades_dispositivo(
+    dispositivo_codigo: str,
+    capacidades: dict,
     timestamp: str | None = None,
 ) -> bool:
-    resource_uuid = get_device_interscity_uuid(dispositivo_id)
-    if not resource_uuid or not INTERSCITY_API_URL or not RESOURCE_ADAPTOR_PATH:
+    recurso_uuid = obter_uuid_interscity_por_codigo(dispositivo_codigo)
+    if not recurso_uuid or not INTERSCITY_API_URL or not RESOURCE_ADAPTOR_PATH:
         return False
 
-    values = {key: value for key, value in capabilities.items() if value is not None}
-    if not values:
+    valores = {
+        chave: valor for chave, valor in capacidades.items() if valor is not None
+    }
+    if not valores:
         return False
 
     ts = _timestamp(timestamp)
     url = (
         f"{INTERSCITY_API_URL.rstrip('/')}/"
-        f"{RESOURCE_ADAPTOR_PATH.strip('/')}/{resource_uuid}/data"
+        f"{RESOURCE_ADAPTOR_PATH.strip('/')}/{recurso_uuid}/data"
     )
     payload = {
         "data": {
-            key: [{"value": value, "timestamp": ts}]
-            for key, value in values.items()
+            key: [{"value": value, "timestamp": ts}] for key, value in valores.items()
         }
     }
-    request = Request(
+    requisicao = Request(
         url,
         data=json.dumps(payload).encode("utf-8"),
         headers={"Content-Type": "application/json", "Accept": "application/json"},
         method="POST",
     )
 
-    response = None
+    resposta = None
     try:
-        response = urlopen(request, timeout=REQUEST_TIMEOUT_SECONDS)
+        resposta = urlopen(requisicao, timeout=INTERSCITY_TIMEOUT_SECONDS)
         return True
     except (TimeoutError, SocketTimeout, HTTPError, URLError, OSError) as exc:
-        logger.warning(
-            "interscity publish failed device=%s resource=%s error=%s",
-            dispositivo_id,
-            resource_uuid,
+        registrador.warning(
+            "falha ao publicar no interscity dispositivo_codigo=%s resource=%s error=%s",
+            dispositivo_codigo,
+            recurso_uuid,
             exc,
         )
         return False
     finally:
-        if response and hasattr(response, "close"):
-            response.close()
+        if resposta and hasattr(resposta, "close"):
+            resposta.close()
+
+
+class PublicadorInterscity:
+    def __init__(
+        self,
+        tamanho_fila: int = INTERSCITY_QUEUE_MAX,
+        trabalhadores: int = INTERSCITY_WORKERS,
+    ) -> None:
+        self._fila: Queue[tuple[str, dict, str | None]] = Queue(maxsize=tamanho_fila)
+        self._parar = Event()
+        self._trabalhadores = max(1, trabalhadores)
+        self._threads: list[Thread] = []
+
+    def iniciar(self) -> None:
+        if self._threads:
+            return
+        self._parar.clear()
+        for indice in range(self._trabalhadores):
+            thread = Thread(
+                target=self._executar,
+                name=f"interscity-publicador-{indice + 1}",
+                daemon=True,
+            )
+            thread.start()
+            self._threads.append(thread)
+
+    def parar(self) -> None:
+        self._parar.set()
+        for thread in self._threads:
+            thread.join(timeout=2)
+        self._threads.clear()
+
+    def enfileirar(
+        self,
+        dispositivo_codigo: str,
+        capacidades: dict,
+        timestamp: str | None = None,
+    ) -> bool:
+        try:
+            self._fila.put_nowait((dispositivo_codigo, capacidades, timestamp))
+        except Full:
+            registrador.warning(
+                "fila interscity cheia; publicacao descartada dispositivo_codigo=%s",
+                dispositivo_codigo,
+            )
+            return False
+        return True
+
+    def _executar(self) -> None:
+        while not self._parar.is_set() or not self._fila.empty():
+            try:
+                dispositivo_codigo, capacidades, timestamp = self._fila.get(
+                    timeout=0.2
+                )
+            except Empty:
+                continue
+
+            try:
+                publicar_capacidades_dispositivo(
+                    dispositivo_codigo,
+                    capacidades,
+                    timestamp,
+                )
+            except Exception:
+                registrador.exception(
+                    "erro inesperado no worker interscity dispositivo_codigo=%s",
+                    dispositivo_codigo,
+                )
+            finally:
+                self._fila.task_done()

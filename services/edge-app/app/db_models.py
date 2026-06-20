@@ -15,6 +15,7 @@ class Dispositivo(Base):
     __tablename__ = "dispositivos"
 
     id: Mapped[str] = mapped_column(String, primary_key=True)
+    codigo: Mapped[str] = mapped_column(String, nullable=False, unique=True)
     sala_id: Mapped[str] = mapped_column(ForeignKey("salas.id"), nullable=False)
     ativo: Mapped[bool] = mapped_column(
         Boolean,
@@ -22,16 +23,19 @@ class Dispositivo(Base):
         default=True,
         server_default=text("1"),
     )
-    status: Mapped[str | None] = mapped_column(Text)
     interscity_uuid: Mapped[str | None] = mapped_column(Text)
 
 
 class Aula(Base):
     __tablename__ = "aulas"
-    __table_args__ = (Index("idx_aulas_sala_tempo", "sala_id", "inicio", "fim"),)
+    __table_args__ = (
+        Index("idx_aulas_sala_tempo", "sala_id", "inicio", "fim"),
+        Index("idx_aulas_turma", "turma_id"),
+    )
 
     id: Mapped[str] = mapped_column(String, primary_key=True)
     nome: Mapped[str] = mapped_column(Text, nullable=False)
+    turma_id: Mapped[str] = mapped_column(String, nullable=False)
     sala_id: Mapped[str] = mapped_column(ForeignKey("salas.id"), nullable=False)
     inicio: Mapped[str] = mapped_column(Text, nullable=False)
     fim: Mapped[str] = mapped_column(Text, nullable=False)
@@ -46,16 +50,18 @@ class Aluno(Base):
     nome: Mapped[str] = mapped_column(Text, nullable=False)
 
 
-class MatriculaAula(Base):
-    __tablename__ = "matriculas_aula"
-
-    aula_id: Mapped[str] = mapped_column(
-        ForeignKey("aulas.id", ondelete="CASCADE"),
-        primary_key=True,
+class MatriculaTurma(Base):
+    __tablename__ = "matriculas_turma"
+    __table_args__ = (
+        Index("idx_matriculas_turma_turma", "turma_id"),
+        Index("idx_matriculas_turma_aluno", "aluno_id"),
     )
+
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    turma_id: Mapped[str] = mapped_column(String, nullable=False)
     aluno_id: Mapped[str] = mapped_column(
         ForeignKey("alunos.id", ondelete="CASCADE"),
-        primary_key=True,
+        nullable=False,
     )
 
 

@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from datetime import datetime
 from zoneinfo import ZoneInfo
 import uuid
@@ -7,180 +8,229 @@ from sqlalchemy import or_, select
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
 from app.config import ZONE_INFO
-from app.db import SessionLocal, session_scope
-from app.db_models import Aluno, Aula as DbAula, Dispositivo, EmbeddingFacial
-from app.db_models import EventoPresenca, MatriculaAula
-from app.models import Aula, DeviceContext
-from app.redis_store import replace_runtime_cache
+from app.db import SessionLocal, escopo_sessao
+from app.db_models import Aluno, Aula, Dispositivo, EmbeddingFacial
+from app.db_models import EventoPresenca, MatriculaTurma
+from app.models import ContextoDispositivo
+from app.redis_store import obter_aulas_por_sala, obter_dispositivo_por_codigo
+from app.redis_store import substituir_cache_redis
 
-TZ = ZoneInfo(ZONE_INFO)
-INACTIVE_AULA_STATUSES = ("FECHADA", "CANCELADA")
-
-
-def parse_dt(value: str) -> datetime:
-    parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-    if parsed.tzinfo is None:
-        return parsed.replace(tzinfo=TZ)
-    return parsed.astimezone(TZ)
+FUSO_HORARIO = ZoneInfo(ZONE_INFO)
+STATUS_AULA_INATIVA = ("FECHADA", "CANCELADA")
 
 
-def get_sala_id_for_device(dispositivo_id: str) -> str | None:
-    with SessionLocal() as session:
-        return session.scalar(
-            select(Dispositivo.sala_id).where(
-                Dispositivo.id == dispositivo_id,
-                Dispositivo.ativo.is_(True),
-            )
-        )
+@dataclass(frozen=True)
+class AulaAtual:
+    id: str
+    nome: str
+    turma_id: str
+    sala_id: str
+    inicio: datetime
+    fim: datetime
+    status: str | None = None
 
 
-def get_device_interscity_uuid(dispositivo_id: str) -> str | None:
-    with SessionLocal() as session:
-        interscity_uuid = session.scalar(
-            select(Dispositivo.interscity_uuid).where(Dispositivo.id == dispositivo_id)
-        )
-        return interscity_uuid or None
+def converter_data_hora(valor: str) -> datetime:
+    data_hora = datetime.fromisoformat(valor.replace("Z", "+00:00"))
+    if data_hora.tzinfo is None:
+        return data_hora.replace(tzinfo=FUSO_HORARIO)
+    return data_hora.astimezone(FUSO_HORARIO)
 
 
-def _aula_from_model(aula: DbAula) -> Aula:
-    return Aula(
-        id=aula.id,
-        nome=aula.nome,
-        sala_id=aula.sala_id,
-        inicio=parse_dt(aula.inicio),
-        fim=parse_dt(aula.fim),
-        status=aula.status,
+def buscar_dispositivo_ativo_por_codigo(dispositivo_codigo: str) -> dict | None:
+    return obter_dispositivo_por_codigo(dispositivo_codigo)
+
+
+def buscar_sala_id_por_dispositivo(dispositivo_codigo: str) -> str | None:
+    dispositivo = buscar_dispositivo_ativo_por_codigo(dispositivo_codigo)
+    return dispositivo["sala_id"] if dispositivo else None
+
+
+def buscar_uuid_dispositivo_por_codigo(dispositivo_codigo: str) -> str | None:
+    dispositivo = buscar_dispositivo_ativo_por_codigo(dispositivo_codigo)
+    return dispositivo["dispositivo_id"] if dispositivo else None
+
+
+def _aula_do_cache(dados: dict) -> AulaAtual:
+    return AulaAtual(
+        id=dados["id"],
+        nome=dados["nome"],
+        turma_id=dados["turma_id"],
+        sala_id=dados["sala_id"],
+        inicio=converter_data_hora(dados["inicio"]),
+        fim=converter_data_hora(dados["fim"]),
+        status=dados.get("status"),
     )
 
 
-def _aulas_for_sala(sala_id: str) -> list[Aula]:
-    with SessionLocal() as session:
-        rows = session.scalars(
-            select(DbAula)
-            .where(
-                DbAula.sala_id == sala_id,
-                or_(
-                    DbAula.status.is_(None),
-                    DbAula.status.not_in(INACTIVE_AULA_STATUSES),
-                ),
-            )
-            .order_by(DbAula.inicio)
-        ).all()
-    aulas = [_aula_from_model(row) for row in rows]
+def _aulas_da_sala(sala_id: str) -> list[AulaAtual]:
+    aulas = [_aula_do_cache(linha) for linha in obter_aulas_por_sala(sala_id)]
     return sorted(aulas, key=lambda aula: aula.inicio)
 
 
-def _current_and_next_aula(
-    sala_id: str, now: datetime
-) -> tuple[Aula | None, Aula | None]:
-    next_aula = None
-    for aula in _aulas_for_sala(sala_id):
-        if aula.inicio <= now < aula.fim:
+def _aula_atual_e_proxima(
+    sala_id: str, agora: datetime
+) -> tuple[AulaAtual | None, AulaAtual | None]:
+    proxima_aula = None
+    for aula in _aulas_da_sala(sala_id):
+        if aula.inicio <= agora < aula.fim:
             return aula, None
-        if now < aula.inicio and next_aula is None:
-            next_aula = aula
-    return None, next_aula
+        if agora < aula.inicio and proxima_aula is None:
+            proxima_aula = aula
+    return None, proxima_aula
 
 
-def get_current_aula_for_device(dispositivo_id: str) -> Aula | None:
-    sala_id = get_sala_id_for_device(dispositivo_id)
+def buscar_aula_atual_por_dispositivo(dispositivo_codigo: str) -> AulaAtual | None:
+    sala_id = buscar_sala_id_por_dispositivo(dispositivo_codigo)
     if not sala_id:
         return None
 
-    current, _ = _current_and_next_aula(sala_id, datetime.now(TZ))
-    return current
+    aula_atual, _ = _aula_atual_e_proxima(sala_id, datetime.now(FUSO_HORARIO))
+    return aula_atual
 
 
-def compute_context_for_device(dispositivo_id: str) -> DeviceContext:
-    sala_id = get_sala_id_for_device(dispositivo_id)
+def calcular_contexto_do_dispositivo(dispositivo_codigo: str) -> ContextoDispositivo:
+    sala_id = buscar_sala_id_por_dispositivo(dispositivo_codigo)
     if not sala_id:
-        return DeviceContext(aula_nome="", ms_remaining=0, ms_for_next=0)
+        return ContextoDispositivo(aula_nome="", ms_remaining=0, ms_for_next=0)
 
-    now = datetime.now(TZ)
-    current, next_aula = _current_and_next_aula(sala_id, now)
-    if current:
-        return DeviceContext(
-            aula_nome=current.nome,
-            ms_remaining=max(int((current.fim - now).total_seconds() * 1000), 0),
+    agora = datetime.now(FUSO_HORARIO)
+    aula_atual, proxima_aula = _aula_atual_e_proxima(sala_id, agora)
+    if aula_atual:
+        return ContextoDispositivo(
+            aula_nome=aula_atual.nome,
+            ms_remaining=max(int((aula_atual.fim - agora).total_seconds() * 1000), 0),
             ms_for_next=0,
-            aula_id=current.id,
+            aula_id=aula_atual.id,
             sala_id=sala_id,
         )
-    if next_aula:
-        return DeviceContext(
-            aula_nome=next_aula.nome,
+    if proxima_aula:
+        return ContextoDispositivo(
+            aula_nome=proxima_aula.nome,
             ms_remaining=0,
-            ms_for_next=max(int((next_aula.inicio - now).total_seconds() * 1000), 0),
-            aula_id=next_aula.id,
+            ms_for_next=max(
+                int((proxima_aula.inicio - agora).total_seconds() * 1000), 0
+            ),
+            aula_id=proxima_aula.id,
             sala_id=sala_id,
         )
 
-    return DeviceContext(aula_nome="", ms_remaining=0, ms_for_next=0, sala_id=sala_id)
+    return ContextoDispositivo(
+        aula_nome="", ms_remaining=0, ms_for_next=0, sala_id=sala_id
+    )
 
 
-def save_attendance_event(event: dict) -> dict:
-    event_id = event.get("eventId") or str(uuid.uuid4())
-    with session_scope() as session:
-        stmt = (
+def salvar_evento_presenca(evento: dict) -> dict:
+    evento_id = evento.get("eventId") or str(uuid.uuid4())
+    with escopo_sessao() as sessao:
+        comando = (
             sqlite_insert(EventoPresenca)
             .values(
-                id=event_id,
-                aluno_id=event["alunoId"],
-                aula_id=event["aulaId"],
-                dispositivo_id=event["dispositivoId"],
-                reconhecido_em=event["recognizedAt"],
-                score=float(event["score"]),
+                id=evento_id,
+                aluno_id=evento["alunoId"],
+                aula_id=evento["aulaId"],
+                dispositivo_id=evento["dispositivoId"],
+                reconhecido_em=evento["recognizedAt"],
+                score=float(evento["score"]),
                 sync_status="pending",
             )
             .on_conflict_do_nothing(index_elements=["aluno_id", "aula_id"])
         )
-        result = session.execute(stmt)
-        is_new = result.rowcount == 1
+        resultado = sessao.execute(comando)
+        novo = resultado.rowcount == 1
 
-        row = session.execute(
-            select(
-                EventoPresenca.id,
-                EventoPresenca.aluno_id,
-                EventoPresenca.aula_id,
-                EventoPresenca.dispositivo_id,
-                EventoPresenca.reconhecido_em,
-                EventoPresenca.score,
-                Aluno.nome.label("aluno_nome"),
+        linha = (
+            sessao.execute(
+                select(
+                    EventoPresenca.id,
+                    EventoPresenca.aluno_id,
+                    EventoPresenca.aula_id,
+                    EventoPresenca.dispositivo_id,
+                    EventoPresenca.reconhecido_em,
+                    EventoPresenca.score,
+                    Aluno.nome.label("aluno_nome"),
+                )
+                .outerjoin(Aluno, Aluno.id == EventoPresenca.aluno_id)
+                .where(
+                    EventoPresenca.aluno_id == evento["alunoId"],
+                    EventoPresenca.aula_id == evento["aulaId"],
+                )
             )
-            .outerjoin(Aluno, Aluno.id == EventoPresenca.aluno_id)
-            .where(
-                EventoPresenca.aluno_id == event["alunoId"],
-                EventoPresenca.aula_id == event["aulaId"],
-            )
-        ).mappings().one_or_none()
+            .mappings()
+            .one_or_none()
+        )
 
-    if row is None:
-        raise RuntimeError("attendance event was not stored")
+    if linha is None:
+        raise RuntimeError("evento de presenca nao foi armazenado")
 
     return {
-        "id": row["id"],
-        "aluno_id": row["aluno_id"],
-        "aluno_nome": row["aluno_nome"] or row["aluno_id"],
-        "aula_id": row["aula_id"],
-        "dispositivo_id": row["dispositivo_id"],
-        "reconhecido_em": row["reconhecido_em"],
-        "score": row["score"],
-        "is_new": is_new,
+        "id": linha["id"],
+        "aluno_id": linha["aluno_id"],
+        "aluno_nome": linha["aluno_nome"] or linha["aluno_id"],
+        "aula_id": linha["aula_id"],
+        "dispositivo_id": linha["dispositivo_id"],
+        "dispositivo_codigo": evento.get("dispositivoCodigo"),
+        "reconhecido_em": linha["reconhecido_em"],
+        "score": linha["score"],
+        "novo": novo,
     }
 
 
-def rebuild_runtime_cache() -> None:
-    with SessionLocal() as session:
-        matricula_rows = session.execute(
-            select(MatriculaAula.aula_id, MatriculaAula.aluno_id)
+def reconstruir_cache_redis() -> None:
+    with SessionLocal() as sessao:
+        linhas_dispositivo = sessao.execute(
+            select(
+                Dispositivo.id,
+                Dispositivo.codigo,
+                Dispositivo.sala_id,
+                Dispositivo.ativo,
+                Dispositivo.interscity_uuid,
+            )
         ).all()
-        embedding_rows = session.execute(
+        linhas_aula = sessao.scalars(
+            select(Aula)
+            .where(
+                or_(
+                    Aula.status.is_(None),
+                    Aula.status.not_in(STATUS_AULA_INATIVA),
+                )
+            )
+            .order_by(Aula.sala_id, Aula.inicio)
+        ).all()
+        linhas_matricula = sessao.execute(
+            select(Aula.id, MatriculaTurma.aluno_id).join(
+                MatriculaTurma,
+                MatriculaTurma.turma_id == Aula.turma_id,
+            )
+        ).all()
+        linhas_embedding = sessao.execute(
             select(EmbeddingFacial.id, EmbeddingFacial.aluno_id, EmbeddingFacial.vetor)
         ).all()
 
-    aula_alunos: dict[str, list[str]] = {}
-    for aula_id, aluno_id in matricula_rows:
-        aula_alunos.setdefault(aula_id, []).append(aluno_id)
+    dispositivos = {
+        codigo: {
+            "dispositivo_id": dispositivo_id,
+            "dispositivo_codigo": codigo,
+            "sala_id": sala_id,
+            "ativo": bool(ativo),
+            "interscity_uuid": interscity_uuid,
+        }
+        for dispositivo_id, codigo, sala_id, ativo, interscity_uuid in linhas_dispositivo
+    }
+
+    sala_aulas: dict[str, list[dict]] = {}
+    for aula in linhas_aula:
+        sala_aulas.setdefault(aula.sala_id, []).append(
+            {
+                "id": aula.id,
+                "nome": aula.nome,
+                "turma_id": aula.turma_id,
+                "sala_id": aula.sala_id,
+                "inicio": aula.inicio,
+                "fim": aula.fim,
+                "status": aula.status,
+            }
+        )
 
     embeddings = {
         embedding_id: msgpack.packb(
@@ -190,6 +240,11 @@ def rebuild_runtime_cache() -> None:
             },
             use_bin_type=True,
         )
-        for embedding_id, aluno_id, vetor in embedding_rows
+        for embedding_id, aluno_id, vetor in linhas_embedding
     }
-    replace_runtime_cache(aula_alunos, embeddings)
+
+    aula_alunos: dict[str, list[str]] = {}
+    for aula_id, aluno_id in linhas_matricula:
+        aula_alunos.setdefault(aula_id, []).append(aluno_id)
+
+    substituir_cache_redis(dispositivos, sala_aulas, aula_alunos, embeddings)

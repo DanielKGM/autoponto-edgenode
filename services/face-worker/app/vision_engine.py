@@ -8,7 +8,7 @@ logger = logging.getLogger(__name__)
 
 DETECT_MODEL_PATH = os.getenv("DETECT_MODEL_PATH")
 RECOG_MODEL_PATH = os.getenv("RECOG_MODEL_PATH")
-FACE_SCORE_THRESHOLD = float(os.getenv("FACE_SCORE_THRESHOLD", "0.85"))
+LIMIAR_DETECCAO_FACIAL = float(os.getenv("FACE_SCORE_THRESHOLD", "0.85"))
 
 
 class VisionEngine:
@@ -17,7 +17,7 @@ class VisionEngine:
             DETECT_MODEL_PATH,
             "",
             (240, 240),
-            FACE_SCORE_THRESHOLD,
+            LIMIAR_DETECCAO_FACIAL,
             0.3,
             5000,
         )
@@ -26,47 +26,47 @@ class VisionEngine:
             "",
         )
 
-    def decode_jpeg(self, frame_bytes: bytes) -> np.ndarray | None:
+    def decodificar_jpeg(self, frame_bytes: bytes) -> np.ndarray | None:
         try:
-            np_buf = np.frombuffer(frame_bytes, dtype=np.uint8)
-            image = cv2.imdecode(np_buf, cv2.IMREAD_COLOR)
+            buffer_numpy = np.frombuffer(frame_bytes, dtype=np.uint8)
+            imagem = cv2.imdecode(buffer_numpy, cv2.IMREAD_COLOR)
 
-            if image is None:
+            if imagem is None:
                 logger.warning("jpeg decode returned None")
                 return None
 
-            return cv2.rotate(image, cv2.ROTATE_180)
+            return cv2.rotate(imagem, cv2.ROTATE_180)
         except Exception as exc:
             logger.exception("failed to decode jpeg: %s", exc)
             return None
 
-    def detect_best_face(self, image: np.ndarray):
+    def detectar_melhor_rosto(self, imagem: np.ndarray):
         try:
-            h, w = image.shape[:2]
-            self.detector.setInputSize((w, h))
-            _, faces = self.detector.detect(image)
+            altura, largura = imagem.shape[:2]
+            self.detector.setInputSize((largura, altura))
+            _, rostos = self.detector.detect(imagem)
 
-            if faces is None or len(faces) == 0:
+            if rostos is None or len(rostos) == 0:
                 return None
 
-            return max(faces, key=lambda face: float(face[14]))
+            return max(rostos, key=lambda rosto: float(rosto[14]))
         except Exception as exc:
             logger.exception("failed during face detection: %s", exc)
             return None
 
-    def extract_embedding(self, image: np.ndarray, face) -> np.ndarray | None:
+    def extrair_embedding(self, imagem: np.ndarray, rosto) -> np.ndarray | None:
         try:
-            aligned = self.recognizer.alignCrop(image, face)
-            return self.recognizer.feature(aligned)
+            alinhado = self.recognizer.alignCrop(imagem, rosto)
+            return self.recognizer.feature(alinhado)
         except Exception as exc:
             logger.exception("failed during embedding extraction: %s", exc)
             return None
 
-    def compare(self, feat1: np.ndarray, feat2: np.ndarray) -> float:
+    def comparar(self, embedding_1: np.ndarray, embedding_2: np.ndarray) -> float:
         return float(
             self.recognizer.match(
-                feat1,
-                feat2,
+                embedding_1,
+                embedding_2,
                 cv2.FaceRecognizerSF_FR_COSINE,
             )
         )

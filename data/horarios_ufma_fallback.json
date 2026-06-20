@@ -1,0 +1,18 @@
+[
+  {"codigo": "M1", "horario_inicio": "07:30"},
+  {"codigo": "M2", "horario_inicio": "08:20"},
+  {"codigo": "M3", "horario_inicio": "09:20"},
+  {"codigo": "M4", "horario_inicio": "10:10"},
+  {"codigo": "M5", "horario_inicio": "11:10"},
+  {"codigo": "M6", "horario_inicio": "12:00"},
+  {"codigo": "T1", "horario_inicio": "13:10"},
+  {"codigo": "T2", "horario_inicio": "14:00"},
+  {"codigo": "T3", "horario_inicio": "14:50"},
+  {"codigo": "T4", "horario_inicio": "15:50"},
+  {"codigo": "T5", "horario_inicio": "16:40"},
+  {"codigo": "T6", "horario_inicio": "17:30"},
+  {"codigo": "N1", "horario_inicio": "18:30"},
+  {"codigo": "N2", "horario_inicio": "19:20"},
+  {"codigo": "N3", "horario_inicio": "20:20"},
+  {"codigo": "N4", "horario_inicio": "21:10"}
+]

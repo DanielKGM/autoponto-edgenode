@@ -6,7 +6,9 @@ __pycache__
 .env
 .env.*
 !/.env.example
-data
+data/**
+!data/
+!data/horarios_ufma_fallback.json
 *.npy
 infra/mosquitto/passwd
 docker-compose.override.yml

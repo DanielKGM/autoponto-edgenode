@@ -1,19 +1,20 @@
 from datetime import datetime, timezone
-import json
 import msgpack
 import redis
 
 from app.config import MAX_FRAME_QUEUE, REDIS_HOST, REDIS_PORT
-from app.models import FrameQueueItem
 
 QUEUE_FRAMES = "queue:frames"
 QUEUE_ATTENDANCE_EVENTS = "queue:eventos_presenca"
 FACE_EMBEDDINGS = "face:embeddings"
-DISPOSITIVO_STATUS_PREFIX = "dispositivo:"
-DISPOSITIVO_STATUS_SUFFIX = ":status"
+DISPOSITIVOS_POR_CODIGO = "dispositivos:por_codigo"
+AULA_ALUNOS_PREFIX = "aula:"
+AULA_ALUNOS_SUFFIX = ":alunos"
+SALA_AULAS_PREFIX = "sala:"
+SALA_AULAS_SUFFIX = ":aulas"
 
 
-def get_redis(decode_responses: bool = False) -> redis.Redis:
+def obter_redis(decode_responses: bool = False) -> redis.Redis:
     return redis.Redis(
         host=REDIS_HOST,
         port=REDIS_PORT,
@@ -21,57 +22,107 @@ def get_redis(decode_responses: bool = False) -> redis.Redis:
     )
 
 
-def is_frame_queue_full() -> bool:
-    return int(get_redis().llen(QUEUE_FRAMES)) >= MAX_FRAME_QUEUE
+def fila_frames_cheia() -> bool:
+    return int(obter_redis().llen(QUEUE_FRAMES)) >= MAX_FRAME_QUEUE
 
 
-def enqueue_frame(
+def enfileirar_frame(
     dispositivo_id: str,
+    dispositivo_codigo: str,
     sala_id: str,
     aula_id: str,
     frame_bytes: bytes,
 ) -> int:
-    item = FrameQueueItem(
-        dispositivo_id=dispositivo_id,
-        sala_id=sala_id,
-        aula_id=aula_id,
-        received_at=datetime.now(timezone.utc),
-        frame=frame_bytes,
-    )
-    client = get_redis()
-    client.rpush(QUEUE_FRAMES, msgpack.packb(item.to_queue_payload(), use_bin_type=True))
-    return int(client.llen(QUEUE_FRAMES))
-
-
-def save_device_status(dispositivo_id: str, status: str) -> dict:
-    now = datetime.now(timezone.utc).isoformat()
-    data = {
+    item = {
         "dispositivoId": dispositivo_id,
-        "status": status.strip().lower(),
-        "reportadoEm": now,
+        "dispositivoCodigo": dispositivo_codigo,
+        "salaId": sala_id,
+        "aulaId": aula_id,
+        "receivedAt": datetime.now(timezone.utc).isoformat(),
+        "frame": frame_bytes,
     }
-    client = get_redis(decode_responses=True)
-    client.set(
-        f"{DISPOSITIVO_STATUS_PREFIX}{dispositivo_id}{DISPOSITIVO_STATUS_SUFFIX}",
-        json.dumps(data),
+    cliente = obter_redis()
+    cliente.rpush(QUEUE_FRAMES, msgpack.packb(item, use_bin_type=True))
+    return int(cliente.llen(QUEUE_FRAMES))
+
+
+def _empacotar(valor) -> bytes:
+    return msgpack.packb(valor, use_bin_type=True)
+
+
+def _desempacotar(valor: bytes | None):
+    if valor is None:
+        return None
+    return msgpack.unpackb(valor, raw=False)
+
+
+def _chave_aula_alunos(aula_id: str) -> str:
+    return f"{AULA_ALUNOS_PREFIX}{aula_id}{AULA_ALUNOS_SUFFIX}"
+
+
+def _chave_sala_aulas(sala_id: str) -> str:
+    return f"{SALA_AULAS_PREFIX}{sala_id}{SALA_AULAS_SUFFIX}"
+
+
+def obter_dispositivo_por_codigo(dispositivo_codigo: str) -> dict | None:
+    dispositivo = _desempacotar(
+        obter_redis().hget(DISPOSITIVOS_POR_CODIGO, dispositivo_codigo)
     )
-    client.hset("dispositivos:last_seen", dispositivo_id, now)
-    return data
+    if not dispositivo or not dispositivo.get("ativo"):
+        return None
+    return dispositivo
 
 
-def replace_runtime_cache(aula_alunos: dict[str, list[str]], embeddings: dict[str, bytes]) -> None:
-    client = get_redis()
-    pipe = client.pipeline()
-    for key in client.scan_iter("aula:*:alunos"):
-        pipe.delete(key)
-    pipe.delete(FACE_EMBEDDINGS)
+def obter_uuid_interscity_por_codigo(dispositivo_codigo: str) -> str | None:
+    dispositivo = obter_dispositivo_por_codigo(dispositivo_codigo)
+    if not dispositivo:
+        return None
+    return dispositivo.get("interscity_uuid") or None
+
+
+def obter_aulas_por_sala(sala_id: str) -> list[dict]:
+    aulas = _desempacotar(obter_redis().get(_chave_sala_aulas(sala_id)))
+    return aulas if isinstance(aulas, list) else []
+
+
+def substituir_cache_redis(
+    dispositivos: dict[str, dict],
+    sala_aulas: dict[str, list[dict]],
+    aula_alunos: dict[str, list[str]],
+    embeddings: dict[str, bytes],
+) -> None:
+    cliente = obter_redis()
+    pipeline = cliente.pipeline()
+
+    for padrao in (
+        f"{AULA_ALUNOS_PREFIX}*{AULA_ALUNOS_SUFFIX}",
+        f"{SALA_AULAS_PREFIX}*{SALA_AULAS_SUFFIX}",
+        "dispositivo:*:status",
+    ):
+        for chave in cliente.scan_iter(padrao):
+            pipeline.delete(chave)
+    pipeline.delete(DISPOSITIVOS_POR_CODIGO)
+    pipeline.delete("dispositivos:last_seen")
+    pipeline.delete(FACE_EMBEDDINGS)
+
+    if dispositivos:
+        pipeline.hset(
+            DISPOSITIVOS_POR_CODIGO,
+            mapping={
+                codigo: _empacotar(dispositivo)
+                for codigo, dispositivo in dispositivos.items()
+            },
+        )
+
+    for sala_id, aulas in sala_aulas.items():
+        pipeline.set(_chave_sala_aulas(sala_id), _empacotar(aulas))
 
     for aula_id, aluno_ids in aula_alunos.items():
-        key = f"aula:{aula_id}:alunos"
+        chave = _chave_aula_alunos(aula_id)
         if aluno_ids:
-            pipe.sadd(key, *aluno_ids)
+            pipeline.sadd(chave, *aluno_ids)
 
     if embeddings:
-        pipe.hset(FACE_EMBEDDINGS, mapping=embeddings)
+        pipeline.hset(FACE_EMBEDDINGS, mapping=embeddings)
 
-    pipe.execute()
+    pipeline.execute()
