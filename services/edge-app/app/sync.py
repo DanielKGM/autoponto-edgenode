@@ -4,6 +4,9 @@ import base64
 import logging
 
 import msgpack
+from sqlalchemy import delete, select, update
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+from sqlalchemy.orm import Session
 
 from app.config import (
     AUTOPONTO_API_TOKEN,
@@ -11,7 +14,9 @@ from app.config import (
     NODE_ID,
     SYNC_INTERVAL_SECONDS,
 )
-from app.db import connect, init_db, transaction
+from app.db import SessionLocal, init_db, session_scope
+from app.db_models import Aluno, Aula, Dispositivo, EmbeddingFacial, MatriculaAula
+from app.db_models import EventoPresenca, Sala, SyncState
 from app.repository import rebuild_runtime_cache
 
 logger = logging.getLogger(__name__)
@@ -61,52 +66,78 @@ def _embedding_blob(value) -> bytes:
     raise ValueError("unsupported embedding payload")
 
 
-def _upsert_many(conn, table: str, rows: list[dict], columns: list[str]) -> None:
+def _active_flag(value) -> bool:
+    if isinstance(value, str):
+        return value.strip().lower() not in ("0", "false", "no", "off", "")
+    return bool(value)
+
+
+def _upsert_many(
+    session: Session,
+    model,
+    rows: list[dict],
+    columns: list[str],
+    conflict_columns: list[str] | None = None,
+) -> None:
     if not rows:
         return
-    placeholders = ", ".join("?" for _ in columns)
-    assignments = ", ".join(f"{col} = excluded.{col}" for col in columns[1:])
-    sql = (
-        f"INSERT INTO {table} ({', '.join(columns)}) VALUES ({placeholders}) "
-        f"ON CONFLICT({columns[0]}) DO UPDATE SET {assignments}"
+
+    conflict_columns = conflict_columns or [columns[0]]
+    stmt = sqlite_insert(model).values(rows)
+    set_values = {
+        col: getattr(stmt.excluded, col)
+        for col in columns
+        if col not in conflict_columns
+    }
+    if set_values:
+        stmt = stmt.on_conflict_do_update(
+            index_elements=conflict_columns,
+            set_=set_values,
+        )
+    else:
+        stmt = stmt.on_conflict_do_nothing(index_elements=conflict_columns)
+    session.execute(stmt)
+
+
+def _insert_matriculas(session: Session, rows: list[dict]) -> None:
+    if not rows:
+        return
+    stmt = (
+        sqlite_insert(MatriculaAula)
+        .values(rows)
+        .on_conflict_do_nothing(index_elements=["aula_id", "aluno_id"])
     )
-    conn.executemany(sql, [tuple(row[col] for col in columns) for row in rows])
+    session.execute(stmt)
 
 
-def _apply_deletions(conn, deleted: dict) -> None:
+def _apply_deletions(session: Session, deleted: dict) -> None:
     for item in deleted.get("matriculas_aula", []):
-        conn.execute(
-            "DELETE FROM matriculas_aula WHERE aula_id = ? AND aluno_id = ?",
-            (item["aula_id"], item["aluno_id"]),
+        session.execute(
+            delete(MatriculaAula).where(
+                MatriculaAula.aula_id == item["aula_id"],
+                MatriculaAula.aluno_id == item["aluno_id"],
+            )
         )
 
-    for table, entity in (
-        ("embeddings_faciais", "embeddings_faciais"),
-        ("aulas", "aulas"),
-        ("dispositivos", "dispositivos"),
-        ("alunos", "alunos"),
-        ("salas", "salas"),
+    for model, entity in (
+        (EmbeddingFacial, "embeddings_faciais"),
+        (Aula, "aulas"),
+        (Dispositivo, "dispositivos"),
+        (Aluno, "alunos"),
+        (Sala, "salas"),
     ):
         ids = deleted.get(entity, [])
         if ids:
-            conn.executemany(
-                f"DELETE FROM {table} WHERE id = ?",
-                [(item_id,) for item_id in ids],
-            )
+            session.execute(delete(model).where(model.id.in_(ids)))
 
 
-def _save_cursors(conn, cursors: dict) -> None:
-    for entity, cursor in cursors.items():
-        if entity not in SYNC_ENTITIES:
-            continue
-        conn.execute(
-            """
-            INSERT INTO sync_state (entity, cursor)
-            VALUES (?, ?)
-            ON CONFLICT(entity) DO UPDATE SET cursor = excluded.cursor
-            """,
-            (entity, str(cursor)),
-        )
+def _save_cursors(session: Session, cursors: dict) -> None:
+    rows = [
+        {"entity": entity, "cursor": str(cursor)}
+        for entity, cursor in cursors.items()
+        if entity in SYNC_ENTITIES
+    ]
+    _upsert_many(session, SyncState, rows, ["entity", "cursor"])
 
 
 def apply_pull_payload(payload: dict) -> None:
@@ -117,19 +148,19 @@ def apply_pull_payload(payload: dict) -> None:
         deleted.get(entity) for entity in RUNTIME_CACHE_ENTITIES
     )
 
-    upserts: tuple[tuple[str, list[dict], list[str]], ...] = (
+    upserts: tuple[tuple[object, list[dict], list[str]], ...] = (
         (
-            "salas",
+            Sala,
             [{"id": item["id"], "nome": item["nome"]} for item in data.get("salas", [])],
             ["id", "nome"],
         ),
         (
-            "dispositivos",
+            Dispositivo,
             [
                 {
                     "id": item["id"],
                     "sala_id": item["sala_id"],
-                    "ativo": int(item.get("ativo", True)),
+                    "ativo": _active_flag(item.get("ativo", True)),
                     "status": item.get("status"),
                     "interscity_uuid": item.get("interscity_uuid"),
                 }
@@ -138,7 +169,7 @@ def apply_pull_payload(payload: dict) -> None:
             ["id", "sala_id", "ativo", "status", "interscity_uuid"],
         ),
         (
-            "aulas",
+            Aula,
             [
                 {
                     "id": item["id"],
@@ -153,7 +184,7 @@ def apply_pull_payload(payload: dict) -> None:
             ["id", "nome", "sala_id", "inicio", "fim", "status"],
         ),
         (
-            "alunos",
+            Aluno,
             [
                 {
                     "id": item["id"],
@@ -166,34 +197,34 @@ def apply_pull_payload(payload: dict) -> None:
         ),
     )
 
-    with transaction() as conn:
-        for table, rows, columns in upserts:
-            _upsert_many(conn, table, rows, columns)
+    with session_scope() as session:
+        for model, rows, columns in upserts:
+            _upsert_many(session, model, rows, columns)
 
-        for item in data.get("matriculas_aula", []):
-            conn.execute(
-                "INSERT OR IGNORE INTO matriculas_aula (aula_id, aluno_id) VALUES (?, ?)",
-                (item["aula_id"], item["aluno_id"]),
-            )
+        _insert_matriculas(
+            session,
+            [
+                {"aula_id": item["aula_id"], "aluno_id": item["aluno_id"]}
+                for item in data.get("matriculas_aula", [])
+            ],
+        )
 
-        for item in data.get("embeddings_faciais", []):
-            conn.execute(
-                """
-                INSERT INTO embeddings_faciais (id, aluno_id, vetor)
-                VALUES (?, ?, ?)
-                ON CONFLICT(id) DO UPDATE SET
-                  aluno_id = excluded.aluno_id,
-                  vetor = excluded.vetor
-                """,
-                (
-                    item["id"],
-                    item["aluno_id"],
-                    _embedding_blob(item["vetor"]),
-                ),
-            )
+        _upsert_many(
+            session,
+            EmbeddingFacial,
+            [
+                {
+                    "id": item["id"],
+                    "aluno_id": item["aluno_id"],
+                    "vetor": _embedding_blob(item["vetor"]),
+                }
+                for item in data.get("embeddings_faciais", [])
+            ],
+            ["id", "aluno_id", "vetor"],
+        )
 
-        _apply_deletions(conn, deleted)
-        _save_cursors(conn, payload.get("cursors", {}))
+        _apply_deletions(session, deleted)
+        _save_cursors(session, payload.get("cursors", {}))
 
     if should_rebuild_cache:
         rebuild_runtime_cache()
@@ -202,42 +233,41 @@ def apply_pull_payload(payload: dict) -> None:
 def _current_cursors(force_full: bool = False) -> dict[str, str]:
     if force_full:
         return {}
-    with connect() as conn:
-        rows = conn.execute("SELECT entity, cursor FROM sync_state").fetchall()
+    with SessionLocal() as session:
+        rows = session.execute(select(SyncState.entity, SyncState.cursor)).all()
         return {
-            row["entity"]: row["cursor"]
-            for row in rows
-            if row["entity"] in SYNC_ENTITIES
+            entity: cursor
+            for entity, cursor in rows
+            if entity in SYNC_ENTITIES
         }
 
 
 def _pending_attendance() -> list[dict]:
-    with connect() as conn:
-        rows = conn.execute(
-            """
-            SELECT
-              id,
-              aluno_id,
-              aula_id,
-              dispositivo_id,
-              reconhecido_em,
-              score
-            FROM eventos_presenca
-            WHERE sync_status = 'pending'
-            ORDER BY reconhecido_em
-            LIMIT 100
-            """
-        ).fetchall()
+    with SessionLocal() as session:
+        rows = session.execute(
+            select(
+                EventoPresenca.id,
+                EventoPresenca.aluno_id,
+                EventoPresenca.aula_id,
+                EventoPresenca.dispositivo_id,
+                EventoPresenca.reconhecido_em,
+                EventoPresenca.score,
+            )
+            .where(EventoPresenca.sync_status == "pending")
+            .order_by(EventoPresenca.reconhecido_em)
+            .limit(100)
+        ).mappings().all()
         return [dict(row) for row in rows]
 
 
 def _mark_synced(ids: list[str]) -> None:
     if not ids:
         return
-    with transaction() as conn:
-        conn.executemany(
-            "UPDATE eventos_presenca SET sync_status = 'synced' WHERE id = ?",
-            [(event_id,) for event_id in ids],
+    with session_scope() as session:
+        session.execute(
+            update(EventoPresenca)
+            .where(EventoPresenca.id.in_(ids))
+            .values(sync_status="synced")
         )
 
 

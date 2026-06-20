@@ -1,104 +1,70 @@
-from contextlib import contextmanager
 from collections.abc import Iterator
-import sqlite3
+from contextlib import contextmanager
+from pathlib import Path
 
-from app.config import SQLITE_PATH
+from sqlalchemy import create_engine, event
+from sqlalchemy.engine import Engine
+from sqlalchemy.orm import DeclarativeBase, Session, sessionmaker
+
+from app.config import SQLITE_PATH as DEFAULT_SQLITE_PATH
 
 
-SCHEMA = """
-PRAGMA journal_mode=WAL;
-PRAGMA foreign_keys=ON;
+class Base(DeclarativeBase):
+    pass
 
-CREATE TABLE IF NOT EXISTS salas (
-  id TEXT PRIMARY KEY,
-  nome TEXT NOT NULL
-);
 
-CREATE TABLE IF NOT EXISTS dispositivos (
-  id TEXT PRIMARY KEY,
-  sala_id TEXT NOT NULL,
-  ativo INTEGER NOT NULL DEFAULT 1,
-  status TEXT,
-  interscity_uuid TEXT,
-  FOREIGN KEY (sala_id) REFERENCES salas(id)
-);
+SQLITE_PATH = DEFAULT_SQLITE_PATH
 
-CREATE TABLE IF NOT EXISTS aulas (
-  id TEXT PRIMARY KEY,
-  nome TEXT NOT NULL,
-  sala_id TEXT NOT NULL,
-  inicio TEXT NOT NULL,
-  fim TEXT NOT NULL,
-  status TEXT,
-  FOREIGN KEY (sala_id) REFERENCES salas(id)
-);
 
-CREATE TABLE IF NOT EXISTS alunos (
-  id TEXT PRIMARY KEY,
-  matricula TEXT NOT NULL,
-  nome TEXT NOT NULL
-);
+def _sqlite_url(sqlite_path: Path) -> str:
+    return f"sqlite:///{sqlite_path}"
 
-CREATE TABLE IF NOT EXISTS matriculas_aula (
-  aula_id TEXT NOT NULL,
-  aluno_id TEXT NOT NULL,
-  PRIMARY KEY (aula_id, aluno_id),
-  FOREIGN KEY (aula_id) REFERENCES aulas(id) ON DELETE CASCADE,
-  FOREIGN KEY (aluno_id) REFERENCES alunos(id) ON DELETE CASCADE
-);
 
-CREATE TABLE IF NOT EXISTS embeddings_faciais (
-  id TEXT PRIMARY KEY,
-  aluno_id TEXT NOT NULL,
-  vetor BLOB NOT NULL,
-  FOREIGN KEY (aluno_id) REFERENCES alunos(id) ON DELETE CASCADE
-);
+def _create_engine(sqlite_path: Path) -> Engine:
+    return create_engine(
+        _sqlite_url(sqlite_path),
+        connect_args={"check_same_thread": False},
+    )
 
-CREATE TABLE IF NOT EXISTS eventos_presenca (
-  id TEXT PRIMARY KEY,
-  aluno_id TEXT NOT NULL,
-  aula_id TEXT NOT NULL,
-  dispositivo_id TEXT NOT NULL,
-  reconhecido_em TEXT NOT NULL,
-  score REAL NOT NULL,
-  sync_status TEXT NOT NULL DEFAULT 'pending',
-  UNIQUE(aluno_id, aula_id)
-);
 
-CREATE TABLE IF NOT EXISTS sync_state (
-  entity TEXT PRIMARY KEY,
-  cursor TEXT NOT NULL
-);
+@event.listens_for(Engine, "connect")
+def _set_sqlite_pragmas(dbapi_connection, _connection_record) -> None:
+    cursor = dbapi_connection.cursor()
+    try:
+        cursor.execute("PRAGMA foreign_keys=ON")
+        cursor.execute("PRAGMA journal_mode=WAL")
+    finally:
+        cursor.close()
 
-CREATE INDEX IF NOT EXISTS idx_aulas_sala_tempo ON aulas(sala_id, inicio, fim);
-CREATE INDEX IF NOT EXISTS idx_embeddings_aluno ON embeddings_faciais(aluno_id);
-CREATE INDEX IF NOT EXISTS idx_eventos_presenca_sync ON eventos_presenca(sync_status);
-CREATE UNIQUE INDEX IF NOT EXISTS idx_eventos_presenca_aluno_aula
-  ON eventos_presenca(aluno_id, aula_id);
-"""
+
+engine = _create_engine(SQLITE_PATH)
+SessionLocal = sessionmaker(bind=engine, autoflush=False, expire_on_commit=False)
+
+
+def configure_database(sqlite_path: Path) -> None:
+    global SQLITE_PATH, engine
+
+    SQLITE_PATH = Path(sqlite_path)
+    engine.dispose()
+    engine = _create_engine(SQLITE_PATH)
+    SessionLocal.configure(bind=engine)
 
 
 def init_db() -> None:
     SQLITE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    with connect() as conn:
-        conn.executescript(SCHEMA)
+    from app import db_models  # noqa: F401
 
-
-def connect() -> sqlite3.Connection:
-    conn = sqlite3.connect(SQLITE_PATH)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys=ON")
-    return conn
+    Base.metadata.create_all(engine)
 
 
 @contextmanager
-def transaction() -> Iterator[sqlite3.Connection]:
-    conn = connect()
+def session_scope() -> Iterator[Session]:
+    session = SessionLocal()
     try:
-        yield conn
-        conn.commit()
+        yield session
+        session.commit()
     except Exception:
-        conn.rollback()
+        session.rollback()
         raise
     finally:
-        conn.close()
+        session.close()

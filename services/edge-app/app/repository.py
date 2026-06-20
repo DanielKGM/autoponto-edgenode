@@ -3,9 +3,13 @@ from zoneinfo import ZoneInfo
 import uuid
 
 import msgpack
+from sqlalchemy import or_, select
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
 from app.config import ZONE_INFO
-from app.db import connect, transaction
+from app.db import SessionLocal, session_scope
+from app.db_models import Aluno, Aula as DbAula, Dispositivo, EmbeddingFacial
+from app.db_models import EventoPresenca, MatriculaAula
 from app.models import Aula, DeviceContext
 from app.redis_store import replace_runtime_cache
 
@@ -21,48 +25,48 @@ def parse_dt(value: str) -> datetime:
 
 
 def get_sala_id_for_device(dispositivo_id: str) -> str | None:
-    with connect() as conn:
-        row = conn.execute(
-            "SELECT sala_id FROM dispositivos WHERE id = ? AND ativo = 1",
-            (dispositivo_id,),
-        ).fetchone()
-        return row["sala_id"] if row else None
+    with SessionLocal() as session:
+        return session.scalar(
+            select(Dispositivo.sala_id).where(
+                Dispositivo.id == dispositivo_id,
+                Dispositivo.ativo.is_(True),
+            )
+        )
 
 
 def get_device_interscity_uuid(dispositivo_id: str) -> str | None:
-    with connect() as conn:
-        row = conn.execute(
-            "SELECT interscity_uuid FROM dispositivos WHERE id = ?",
-            (dispositivo_id,),
-        ).fetchone()
-        if not row:
-            return None
-        return row["interscity_uuid"] or None
+    with SessionLocal() as session:
+        interscity_uuid = session.scalar(
+            select(Dispositivo.interscity_uuid).where(Dispositivo.id == dispositivo_id)
+        )
+        return interscity_uuid or None
 
 
-def _aula_from_row(row) -> Aula:
+def _aula_from_model(aula: DbAula) -> Aula:
     return Aula(
-        id=row["id"],
-        nome=row["nome"],
-        sala_id=row["sala_id"],
-        inicio=parse_dt(row["inicio"]),
-        fim=parse_dt(row["fim"]),
-        status=row["status"],
+        id=aula.id,
+        nome=aula.nome,
+        sala_id=aula.sala_id,
+        inicio=parse_dt(aula.inicio),
+        fim=parse_dt(aula.fim),
+        status=aula.status,
     )
 
 
 def _aulas_for_sala(sala_id: str) -> list[Aula]:
-    with connect() as conn:
-        rows = conn.execute(
-            """
-            SELECT id, nome, sala_id, inicio, fim, status
-            FROM aulas
-            WHERE sala_id = ?
-              AND (status IS NULL OR status NOT IN (?, ?))
-            """,
-            (sala_id, *INACTIVE_AULA_STATUSES),
-        ).fetchall()
-    aulas = [_aula_from_row(row) for row in rows]
+    with SessionLocal() as session:
+        rows = session.scalars(
+            select(DbAula)
+            .where(
+                DbAula.sala_id == sala_id,
+                or_(
+                    DbAula.status.is_(None),
+                    DbAula.status.not_in(INACTIVE_AULA_STATUSES),
+                ),
+            )
+            .order_by(DbAula.inicio)
+        ).all()
+    aulas = [_aula_from_model(row) for row in rows]
     return sorted(aulas, key=lambda aula: aula.inicio)
 
 
@@ -116,40 +120,39 @@ def compute_context_for_device(dispositivo_id: str) -> DeviceContext:
 
 def save_attendance_event(event: dict) -> dict:
     event_id = event.get("eventId") or str(uuid.uuid4())
-    with transaction() as conn:
-        cursor = conn.execute(
-            """
-            INSERT OR IGNORE INTO eventos_presenca
-            (id, aluno_id, aula_id, dispositivo_id, reconhecido_em, score, sync_status)
-            VALUES (?, ?, ?, ?, ?, ?, 'pending')
-            """,
-            (
-                event_id,
-                event["alunoId"],
-                event["aulaId"],
-                event["dispositivoId"],
-                event["recognizedAt"],
-                float(event["score"]),
-            ),
+    with session_scope() as session:
+        stmt = (
+            sqlite_insert(EventoPresenca)
+            .values(
+                id=event_id,
+                aluno_id=event["alunoId"],
+                aula_id=event["aulaId"],
+                dispositivo_id=event["dispositivoId"],
+                reconhecido_em=event["recognizedAt"],
+                score=float(event["score"]),
+                sync_status="pending",
+            )
+            .on_conflict_do_nothing(index_elements=["aluno_id", "aula_id"])
         )
-        is_new = cursor.rowcount == 1
-        row = conn.execute(
-            """
-            SELECT
-              eventos_presenca.id,
-              eventos_presenca.aluno_id,
-              eventos_presenca.aula_id,
-              eventos_presenca.dispositivo_id,
-              eventos_presenca.reconhecido_em,
-              eventos_presenca.score,
-              COALESCE(alunos.nome, eventos_presenca.aluno_id) AS aluno_nome
-            FROM eventos_presenca
-            LEFT JOIN alunos ON alunos.id = eventos_presenca.aluno_id
-            WHERE eventos_presenca.aluno_id = ?
-              AND eventos_presenca.aula_id = ?
-            """,
-            (event["alunoId"], event["aulaId"]),
-        ).fetchone()
+        result = session.execute(stmt)
+        is_new = result.rowcount == 1
+
+        row = session.execute(
+            select(
+                EventoPresenca.id,
+                EventoPresenca.aluno_id,
+                EventoPresenca.aula_id,
+                EventoPresenca.dispositivo_id,
+                EventoPresenca.reconhecido_em,
+                EventoPresenca.score,
+                Aluno.nome.label("aluno_nome"),
+            )
+            .outerjoin(Aluno, Aluno.id == EventoPresenca.aluno_id)
+            .where(
+                EventoPresenca.aluno_id == event["alunoId"],
+                EventoPresenca.aula_id == event["aulaId"],
+            )
+        ).mappings().one_or_none()
 
     if row is None:
         raise RuntimeError("attendance event was not stored")
@@ -157,7 +160,7 @@ def save_attendance_event(event: dict) -> dict:
     return {
         "id": row["id"],
         "aluno_id": row["aluno_id"],
-        "aluno_nome": row["aluno_nome"],
+        "aluno_nome": row["aluno_nome"] or row["aluno_id"],
         "aula_id": row["aula_id"],
         "dispositivo_id": row["dispositivo_id"],
         "reconhecido_em": row["reconhecido_em"],
@@ -167,29 +170,26 @@ def save_attendance_event(event: dict) -> dict:
 
 
 def rebuild_runtime_cache() -> None:
-    with connect() as conn:
-        matricula_rows = conn.execute(
-            "SELECT aula_id, aluno_id FROM matriculas_aula"
-        ).fetchall()
-        embedding_rows = conn.execute(
-            """
-            SELECT id, aluno_id, vetor
-            FROM embeddings_faciais
-            """
-        ).fetchall()
+    with SessionLocal() as session:
+        matricula_rows = session.execute(
+            select(MatriculaAula.aula_id, MatriculaAula.aluno_id)
+        ).all()
+        embedding_rows = session.execute(
+            select(EmbeddingFacial.id, EmbeddingFacial.aluno_id, EmbeddingFacial.vetor)
+        ).all()
 
     aula_alunos: dict[str, list[str]] = {}
-    for row in matricula_rows:
-        aula_alunos.setdefault(row["aula_id"], []).append(row["aluno_id"])
+    for aula_id, aluno_id in matricula_rows:
+        aula_alunos.setdefault(aula_id, []).append(aluno_id)
 
     embeddings = {
-        row["id"]: msgpack.packb(
+        embedding_id: msgpack.packb(
             {
-                "alunoId": row["aluno_id"],
-                "embedding": row["vetor"],
+                "alunoId": aluno_id,
+                "embedding": vetor,
             },
             use_bin_type=True,
         )
-        for row in embedding_rows
+        for embedding_id, aluno_id, vetor in embedding_rows
     }
     replace_runtime_cache(aula_alunos, embeddings)
