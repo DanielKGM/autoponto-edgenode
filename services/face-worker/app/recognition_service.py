@@ -2,7 +2,7 @@ import logging
 import os
 import time
 
-from app.storage import Armazenamento
+from app.storage import RedisRepo
 from app.vision_engine import VisionEngine
 
 logger = logging.getLogger(__name__)
@@ -11,7 +11,7 @@ LIMIAR_RECONHECIMENTO_FACIAL = float(os.getenv("FACE_MATCH_THRESHOLD", "0.363"))
 
 
 class ServicoReconhecimento:
-    def __init__(self, armazenamento: Armazenamento):
+    def __init__(self, armazenamento: RedisRepo):
         self.armazenamento = armazenamento
         self.visao = VisionEngine()
 
@@ -52,6 +52,7 @@ class ServicoReconhecimento:
                 melhor_aluno = aluno_id
                 melhor_embedding_id = embedding_id
 
+        # tempo
         tempo_ms = round((time.perf_counter() - inicio) * 1000, 2)
 
         if melhor_aluno is None or melhor_score < LIMIAR_RECONHECIMENTO_FACIAL:
