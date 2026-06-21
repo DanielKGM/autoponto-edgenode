@@ -94,6 +94,7 @@ def substituir_cache_redis(
     cliente = obter_redis()
     pipeline = cliente.pipeline()
 
+    # apaga cache redis
     for padrao in (
         f"{AULA_ALUNOS_PREFIX}*{AULA_ALUNOS_SUFFIX}",
         f"{SALA_AULAS_PREFIX}*{SALA_AULAS_SUFFIX}",
@@ -102,9 +103,9 @@ def substituir_cache_redis(
         for chave in cliente.scan_iter(padrao):
             pipeline.delete(chave)
     pipeline.delete(DISPOSITIVOS_POR_CODIGO)
-    pipeline.delete("dispositivos:last_seen")
     pipeline.delete(FACE_EMBEDDINGS)
 
+    # reconstrói cache redis
     if dispositivos:
         pipeline.hset(
             DISPOSITIVOS_POR_CODIGO,
