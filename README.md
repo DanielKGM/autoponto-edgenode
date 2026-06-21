@@ -53,6 +53,7 @@ Tabelas SQLite:
 - `sync_state`: `entity`, `cursor`
 
 `eventos_presenca` tem `UNIQUE(aluno_id, aula_id)`. Portanto, reconhecer a mesma pessoa de novo na mesma aula nao cria uma segunda presenca; o feedback usa o horario da primeira presenca.
+Eventos com `sync_status=pending` nunca sao removidos por limite local. O edge poda apenas historico `synced` que ficar fora dos ultimos `MAX_EVENTOS_PRESENCA_LOCAL` registros.
 
 ```mermaid
 erDiagram
@@ -271,6 +272,7 @@ Nao ha MQTT negativo. Falha de decode, sem rosto, aluno desconhecido ou aluno fo
 ## Sincronizacao Com A API AutoPonto
 
 O edge sincroniza dados replicados e presencas com a API principal. Horarios padrao UFMA nao sao buscados na API: o agendamento usa somente `data/horarios_ufma_fallback.json`.
+Ao registrar uma presenca local, o edge tenta enviar esse evento imediatamente. Se o envio falhar, o evento permanece `pending` e volta a ser enviado pelos ciclos agendados de sincronizacao.
 
 Autenticacao:
 

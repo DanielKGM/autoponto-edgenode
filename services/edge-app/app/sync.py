@@ -8,7 +8,8 @@ from sqlalchemy import delete, select, update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
 
-from app.config import AUTOPONTO_API_TOKEN, AUTOPONTO_API_URL, NODE_ID
+from app.config import AUTOPONTO_API_TOKEN, AUTOPONTO_API_URL
+from app.config import MAX_EVENTOS_PRESENCA_LOCAL, NODE_ID
 from app.db import SessionLocal, escopo_sessao, inicializar_banco
 from app.db_models import Aluno, Aula, Dispositivo, EmbeddingFacial
 from app.db_models import EventoPresenca, MatriculaTurma, Sala, SyncState
@@ -90,13 +91,18 @@ def _salvar_muitos_com_upsert(
     if not registros:
         return
 
+    # avisa quais colunas checar por conflitos, colunas[0] = id
     colunas_conflito = colunas_conflito or [colunas[0]]
     comando = sqlite_insert(modelo).values(registros)
+
+    # concentra colunas de update que não são de conflito
     valores_atualizacao = {
         coluna: getattr(comando.excluded, coluna)
         for coluna in colunas
         if coluna not in colunas_conflito
     }
+
+    # valores com conflito jogados para o update
     if valores_atualizacao:
         comando = comando.on_conflict_do_update(
             index_elements=colunas_conflito,
@@ -148,6 +154,7 @@ def aplicar_payload_sincronizacao(
         removidos.get(entidade) for entidade in ENTIDADES_CACHE_RECONHECIMENTO
     )
 
+    # atualizações = obj, dados, campos
     upserts: tuple[tuple[object, list[dict], list[str]], ...] = (
         (
             Sala,
@@ -250,26 +257,52 @@ def _cursores_atuais() -> dict[str, str]:
         }
 
 
-def _presencas_pendentes() -> list[dict]:
+def _presencas_pendentes(ids: list[str] | None = None, limite: int = 100) -> list[dict]:
     with SessionLocal() as sessao:
-        linhas = (
-            sessao.execute(
-                select(
-                    EventoPresenca.id,
-                    EventoPresenca.aluno_id,
-                    EventoPresenca.aula_id,
-                    EventoPresenca.dispositivo_id,
-                    EventoPresenca.reconhecido_em,
-                    EventoPresenca.score,
-                )
-                .where(EventoPresenca.sync_status == "pending")
-                .order_by(EventoPresenca.reconhecido_em)
-                .limit(100)
+        condicoes = [EventoPresenca.sync_status == "pending"]
+        if ids is not None:
+            if not ids:
+                return []
+            condicoes.append(EventoPresenca.id.in_(ids))
+
+        consulta = (
+            select(
+                EventoPresenca.id,
+                EventoPresenca.aluno_id,
+                EventoPresenca.aula_id,
+                EventoPresenca.dispositivo_id,
+                EventoPresenca.reconhecido_em,
+                EventoPresenca.score,
             )
+            .where(*condicoes)
+            .order_by(EventoPresenca.reconhecido_em)
+            .limit(limite)
+        )
+        linhas = (
+            sessao.execute(consulta)
             .mappings()
             .all()
         )
         return [dict(linha) for linha in linhas]
+
+
+def _podar_eventos_presenca_sincronizados() -> None:
+    if MAX_EVENTOS_PRESENCA_LOCAL <= 0:
+        return
+
+    with escopo_sessao() as sessao:
+        ids_preservados = (
+            select(EventoPresenca.id)
+            .order_by(EventoPresenca.reconhecido_em.desc(), EventoPresenca.id.desc())
+            .limit(MAX_EVENTOS_PRESENCA_LOCAL)
+            .subquery()
+        )
+        sessao.execute(
+            delete(EventoPresenca).where(
+                EventoPresenca.sync_status == "synced",
+                EventoPresenca.id.not_in(select(ids_preservados.c.id)),
+            )
+        )
 
 
 def _marcar_presencas_sincronizadas(ids: list[str]) -> None:
@@ -281,6 +314,37 @@ def _marcar_presencas_sincronizadas(ids: list[str]) -> None:
             .where(EventoPresenca.id.in_(ids))
             .values(sync_status="synced")
         )
+    _podar_eventos_presenca_sincronizados()
+
+
+async def sincronizar_presencas_pendentes(ids: list[str] | None = None) -> bool:
+    if not AUTOPONTO_API_URL:
+        return False
+
+    presencas = _presencas_pendentes(ids)
+    if not presencas:
+        _podar_eventos_presenca_sincronizados()
+        return True
+
+    import httpx
+
+    try:
+        async with httpx.AsyncClient(timeout=20) as cliente:
+            resposta = await cliente.post(
+                f"{AUTOPONTO_API_URL}/edge/attendance/",
+                headers=_cabecalhos_autenticacao(),
+                json={"node_id": NODE_ID, "eventos": presencas},
+            )
+            _validar_resposta_http(resposta, "attendance push")
+            ids_sincronizados = resposta.json().get(
+                "synced_ids",
+                [presenca["id"] for presenca in presencas],
+            )
+            _marcar_presencas_sincronizadas(ids_sincronizados)
+            return True
+    except Exception as exc:
+        logger.warning("attendance immediate sync failed error=%s", exc)
+        return False
 
 
 async def executar_sincronizacao(
@@ -316,19 +380,8 @@ async def executar_sincronizacao(
             substituir_cache=substituir_cache,
         )
 
-        presencas = _presencas_pendentes()
-        if enviar_presencas and presencas:
-            resposta_presencas = await cliente.post(
-                f"{AUTOPONTO_API_URL}/edge/attendance/",
-                headers=_cabecalhos_autenticacao(),
-                json={"node_id": NODE_ID, "eventos": presencas},
-            )
-            _validar_resposta_http(resposta_presencas, "attendance push")
-            ids_sincronizados = resposta_presencas.json().get(
-                "synced_ids",
-                [presenca["id"] for presenca in presencas],
-            )
-            _marcar_presencas_sincronizadas(ids_sincronizados)
+        if enviar_presencas:
+            await sincronizar_presencas_pendentes()
 
 
 def main() -> None:

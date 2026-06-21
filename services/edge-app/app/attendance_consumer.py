@@ -6,6 +6,7 @@ import msgpack
 from app.mqtt import publicar_comando
 from app.redis_store import QUEUE_ATTENDANCE_EVENTS, obter_redis
 from app.repository import converter_data_hora, salvar_evento_presenca
+from app.sync import sincronizar_presencas_pendentes
 
 logger = logging.getLogger(__name__)
 
@@ -57,6 +58,7 @@ async def consumir_eventos_presenca(stop_event: asyncio.Event, mqtt_client) -> N
         try:
             _, bruto = item
             evento = msgpack.unpackb(bruto, raw=False)
-            processar_evento_presenca(evento, mqtt_client)
+            evento_salvo = processar_evento_presenca(evento, mqtt_client)
+            await sincronizar_presencas_pendentes([evento_salvo["id"]])
         except Exception as exc:
             logger.exception("failed to consume attendance event: %s", exc)
