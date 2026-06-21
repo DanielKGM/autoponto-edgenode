@@ -2,22 +2,12 @@ import logging
 import os
 
 from app.recognition_service import ServicoReconhecimento
-from app.storage import RedisRepo
-
-
-def configurar_logs():
-    nome_nivel = os.getenv("LOG_LEVEL", "INFO").upper()
-    nivel = getattr(logging, nome_nivel, logging.INFO)
-
-    logging.basicConfig(
-        level=nivel,
-        format="%(asctime)s %(levelname)s %(name)s - %(message)s",
-    )
+from app.storage import ArmazenamentoRedis
 
 
 def processar_frame(
     item: dict,
-    armazenamento: RedisRepo,
+    armazenamento: ArmazenamentoRedis,
     reconhecimento: ServicoReconhecimento,
     logger,
 ) -> bool:
@@ -74,10 +64,13 @@ def processar_frame(
 
 
 def main():
-    configurar_logs()
+    logging.basicConfig(
+        level=getattr(logging, os.getenv("LOG_LEVEL", "INFO").upper(), logging.INFO),
+        format="%(asctime)s %(levelname)s %(name)s - %(message)s",
+    )
     logger = logging.getLogger("face-worker")
 
-    armazenamento = RedisRepo()
+    armazenamento = ArmazenamentoRedis()
     reconhecimento = ServicoReconhecimento(armazenamento)
 
     logger.info("waiting for frames...")

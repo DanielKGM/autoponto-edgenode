@@ -13,9 +13,9 @@ O node conversa com:
 
 Containers ativos:
 
-- `edge-app`: API HTTP, MQTT local, SQLite, sincronizacao, telemetria e persistencia de presenca.
+- `edge-app`: API HTTP, MQTT local, sincronizacao, telemetria e persistencia Redis.
 - `face-worker`: OpenCV/ONNX, reconhecimento facial e emissao de evento positivo.
-- `redis`: filas e cache quente reconstruivel.
+- `redis`: filas, snapshot diario e presencas pendentes com AOF.
 - `mosquitto`: broker MQTT local para os ESP32.
 
 ```mermaid
@@ -23,104 +23,35 @@ flowchart LR
   ESP32[ESP32] -->|GET /context<br/>POST /frame| EdgeApp[edge-app]
   ESP32 <-->|MQTT log/cmd| Mosquitto[mosquitto]
   EdgeApp <-->|logs por kind e comando| Mosquitto
-  EdgeApp <-->|filas e cache| Redis[redis]
+  EdgeApp <-->|filas, snapshot e presencas| Redis[redis persistente]
   FaceWorker[face-worker] <-->|frames, embeddings, eventos| Redis
-  EdgeApp --> SQLite[(SQLite)]
   EdgeApp <-->|pull/push presencas| AutoPonto[API AutoPonto]
   EdgeApp -->|telemetria| InterSCity[InterSCity Resource Adaptor]
 ```
 
-## Modelo Local
+## Modelo Local Em Redis
 
-O edge nao replica o modelo academico completo da API principal. Ele guarda so o que precisa para operar offline:
+O edge guarda no Redis persistente apenas o necessario para operar offline durante o dia: dispositivo por MAC/codigo, aulas validas por sala, alunos elegiveis por aula, nomes de alunos, embeddings faciais, filas de trabalho e presencas ainda nao sincronizadas. O Redis usa volume Docker e AOF `everysec`.
 
-- saber qual dispositivo esta em qual sala;
-- descobrir a aula atual da sala;
-- validar se o aluno pertence a aula;
-- reconhecer rostos por embeddings;
-- registrar uma presenca valida e sincronizavel;
-- armazenar o UUID InterSCity do dispositivo quando existir.
+O snapshot vale somente para a data local corrente. Se `snapshot:data` estiver ausente ou for de outro dia, `/frame` retorna `snapshot_expired` e `/context` retorna contexto vazio ate o proximo pull valido da API principal.
 
-Tabelas SQLite:
+Chaves principais:
 
-- `salas`: `id`, `nome`
-- `dispositivos`: `id`, `codigo`, `sala_id`, `ativo`, `interscity_uuid`
-- `aulas`: `id`, `nome`, `turma_id`, `sala_id`, `inicio`, `fim`, `status`
-- `alunos`: `id`, `matricula`, `nome`
-- `matriculas_turma`: `id`, `turma_id`, `aluno_id`
-- `embeddings_faciais`: `id`, `aluno_id`, `vetor`
-- `eventos_presenca`: `id`, `aluno_id`, `aula_id`, `dispositivo_id`, `reconhecido_em`, `score`, `sync_status`
-- `sync_state`: `entity`, `cursor`
-
-`eventos_presenca` tem `UNIQUE(aluno_id, aula_id)`. Portanto, reconhecer a mesma pessoa de novo na mesma aula nao cria uma segunda presenca; o feedback usa o horario da primeira presenca.
-Eventos com `sync_status=pending` nunca sao removidos por limite local. O edge poda apenas historico `synced` que ficar fora dos ultimos `MAX_EVENTOS_PRESENCA_LOCAL` registros.
-
-```mermaid
-erDiagram
-  SALAS ||--o{ DISPOSITIVOS : possui
-  SALAS ||--o{ AULAS : recebe
-  AULAS }o--o{ MATRICULAS_TURMA : deriva_por_turma
-  ALUNOS ||--o{ MATRICULAS_TURMA : participa
-  ALUNOS ||--o{ EMBEDDINGS_FACIAIS : possui
-  ALUNOS ||--o{ EVENTOS_PRESENCA : gera
-  AULAS ||--o{ EVENTOS_PRESENCA : recebe
-
-  SALAS {
-    string id PK
-    string nome
-  }
-  DISPOSITIVOS {
-    string id PK
-    string codigo UK
-    string sala_id FK
-    boolean ativo
-    string interscity_uuid
-  }
-  AULAS {
-    string id PK
-    string nome
-    string turma_id
-    string sala_id FK
-    datetime inicio
-    datetime fim
-    string status
-  }
-  ALUNOS {
-    string id PK
-    string matricula
-    string nome
-  }
-  MATRICULAS_TURMA {
-    string id PK
-    string turma_id
-    string aluno_id FK
-  }
-  EMBEDDINGS_FACIAIS {
-    string id PK
-    string aluno_id FK
-    blob vetor
-  }
-  EVENTOS_PRESENCA {
-    string id PK
-    string aluno_id
-    string aula_id
-    string dispositivo_id
-    datetime reconhecido_em
-    float score
-    string sync_status
-  }
-```
-
-## Redis
-
-Redis e fila/cache, nao fonte duravel.
-
+- `snapshot:data`: data local do snapshot (`YYYY-MM-DD`).
+- `snapshot:synced_at`: timestamp retornado pela API principal.
 - `queue:frames`: frames JPEG recebidos do ESP32.
 - `queue:eventos_presenca`: eventos positivos gerados pelo `face-worker`.
 - `dispositivos:por_codigo`: hash por MAC/codigo do ESP32.
-- `sala:{sala_id}:aulas`: aulas ativas da sala, ordenadas por inicio.
-- `face:embeddings`: hash de embeddings por `embedding_id`.
+- `sala:{sala_id}:aulas`: aulas validas da sala, ordenadas por inicio.
 - `aula:{aula_id}:alunos`: set de alunos elegiveis para a aula.
+- `alunos:por_id`: hash minimo para montar feedback de presenca.
+- `face:embeddings`: hash de embeddings por `embedding_id`.
+- `presenca:eventos`: hash `event_id -> evento`.
+- `presenca:por_aluno_aula`: hash `aluno_id:aula_id -> event_id`.
+- `presenca:pendentes`: sorted set de eventos ainda nao enviados.
+- `presenca:sincronizadas`: sorted set usado para retencao local.
+
+Reconhecer a mesma pessoa de novo na mesma aula nao cria uma segunda presenca: o indice `presenca:por_aluno_aula` garante idempotencia. Eventos pendentes nao sao removidos por limite local; o edge poda apenas historico sincronizado acima de `MAX_EVENTOS_PRESENCA_REDIS`.
 
 Exemplos de estrutura:
 
@@ -183,6 +114,20 @@ valor: msgpack([
 aula:aula-uuid:alunos
 tipo: set
 membros: "aluno-uuid-1", "aluno-uuid-2"
+
+presenca:eventos
+tipo: hash
+campo: "evento-local-uuid"
+valor: msgpack({
+  "id": "evento-local-uuid",
+  "aluno_id": "aluno-uuid",
+  "aluno_nome": "Daniel Silva",
+  "aula_id": "aula-uuid",
+  "dispositivo_id": "dispositivo-uuid",
+  "dispositivo_codigo": "ESP32-LAB101",
+  "reconhecido_em": "2026-06-18T20:10:03.000000+00:00",
+  "score": 0.72
+})
 ```
 
 ## API Local Para ESP32
@@ -236,7 +181,6 @@ sequenceDiagram
   participant API as edge-app
   participant R as redis
   participant W as face-worker
-  participant DB as SQLite
   participant MQ as mosquitto
 
   ESP->>API: GET /context
@@ -251,8 +195,9 @@ sequenceDiagram
   alt aluno reconhecido e elegivel
     W->>R: RPUSH queue:eventos_presenca
     API->>R: BLPOP queue:eventos_presenca
-    API->>DB: INSERT OR IGNORE eventos_presenca
+    API->>R: Lua HSET/ZADD presenca pendente
     API->>MQ: publish cmd/{dispositivo_codigo}
+    API->>R: tenta push imediato para API principal
   else falha
     W-->>W: log sem MQTT
   end
@@ -271,7 +216,7 @@ Nao ha MQTT negativo. Falha de decode, sem rosto, aluno desconhecido ou aluno fo
 
 ## Sincronizacao Com A API AutoPonto
 
-O edge sincroniza dados replicados e presencas com a API principal. Horarios padrao UFMA nao sao buscados na API: o agendamento usa somente `data/horarios_ufma_fallback.json`.
+O edge sincroniza o snapshot Redis do dia e as presencas com a API principal. Horarios padrao UFMA nao sao buscados na API: o agendamento usa somente `data/horarios_ufma_fallback.json`.
 Ao registrar uma presenca local, o edge tenta enviar esse evento imediatamente. Se o envio falhar, o evento permanece `pending` e volta a ser enviado pelos ciclos agendados de sincronizacao.
 
 Autenticacao:
@@ -286,51 +231,39 @@ X-Node-Id: <NODE_ID>
 Endpoint:
 
 ```http
-GET /edge/pull/?node_id=<NODE_ID>&cursors=<msgpack-hex>
+GET /edge/pull/?node_id=<NODE_ID>
 ```
 
 Payload esperado:
 
 ```json
 {
-  "data": {
-    "salas": [],
-    "dispositivos": [],
-    "aulas": [],
-    "alunos": [],
-    "matriculas_turma": [],
-    "embeddings_faciais": []
-  },
-  "deleted": {
-    "salas": [],
-    "dispositivos": [],
-    "aulas": [],
-    "alunos": [],
-    "matriculas_turma": [],
-    "embeddings_faciais": []
-  },
-  "cursors": {
-    "aulas": "2026-06-18T12:00:00Z"
+  "snapshot_data": "2026-06-18",
+  "synced_at": "2026-06-18T12:00:00Z",
+  "cache_redis": {
+    "dispositivos_por_codigo": {},
+    "aulas_por_sala": {},
+    "alunos_por_aula": {},
+    "alunos_por_id": {},
+    "embeddings_faciais": {}
   }
 }
 ```
 
-Cursores:
+Snapshot:
 
-- `cursors` sao marcadores incrementais por entidade, salvos em `sync_state`.
-- Na primeira sincronizacao ou quando faltar algum cursor, o edge envia `full=true` e substitui o cache replicado local.
-- Depois de aplicar o pull com sucesso, o edge salva os cursores retornados pelo backend.
-- No proximo ciclo, o edge envia esses cursores para receber apenas alteracoes posteriores.
-- Horarios padrao UFMA nao fazem parte de `data`, `deleted` nem `cursors`.
+- O backend retorna sempre um snapshot autoritativo do dia pronto para gravar no Redis.
+- O edge substitui atomicamente as chaves de snapshot/cache a cada pull.
+- Nao ha `data`, entidades completas, `full=true`, `cursors`, incremental nem `deleted`.
+- Horarios padrao UFMA nao fazem parte do pull; o agendamento usa o JSON local.
 
-Campos por recurso:
+Campos esperados em `cache_redis`:
 
-- `salas`: `id`, `nome`
-- `dispositivos`: `id`, `codigo`, `sala_id`, `ativo`, `interscity_uuid`
-- `aulas`: `id`, `nome`, `turma_id`, `sala_id`, `inicio`, `fim`, `status`
-- `alunos`: `id`, `matricula`, `nome`
-- `matriculas_turma`: `id`, `turma_id`, `aluno_id`
-- `embeddings_faciais`: `id`, `aluno_id`, `vetor`
+- `dispositivos_por_codigo`: por MAC/codigo, contendo `dispositivo_id`, `dispositivo_codigo`, `sala_id`, `ativo`, `interscity_uuid`.
+- `aulas_por_sala`: listas de aulas com `id`, `nome`, `turma_id`, `sala_id`, `inicio`, `fim`, `status`.
+- `alunos_por_aula`: mapa `aula_id -> [aluno_id]`.
+- `alunos_por_id`: mapa `aluno_id -> {"nome": "..."}`.
+- `embeddings_faciais`: mapa `embedding_id -> {"alunoId": "...", "embedding": {"dtype": "float32", "shape": [1, N], "data": [...]}}`.
 
 ### Push De Presencas
 
@@ -368,15 +301,10 @@ Resposta esperada:
 
 ### Sync Manual
 
-O comando manual para um ciclo incremental e:
+Os dois scripts executam o mesmo pull snapshot autoritativo. Os nomes apenas separam os usos operacionais de agendamento.
 
 ```bash
 ./scripts/sincronizacao-incremental-edge.sh
-```
-
-O comando manual para um pull completo e:
-
-```bash
 ./scripts/sincronizacao-completa-edge.sh
 ```
 
@@ -575,15 +503,14 @@ sequenceDiagram
 
 ## Reset De Dados Local
 
-Use quando mudar o schema local ou quiser recriar o cache SQLite:
+Use quando quiser apagar snapshot, filas e presencas locais do Redis:
 
 ```bash
 docker compose down -v --remove-orphans
-rm -f data/db/db.sql data/db/db.sql-wal data/db/db.sql-shm
 docker compose up -d --build
 ```
 
-Depois do reset, os dados locais voltam pelo proximo pull completo da API principal.
+Depois do reset, o edge so volta a reconhecer quando receber um snapshot valido do dia pela API principal.
 
 ## Setup
 
@@ -605,7 +532,7 @@ docker compose ps
 
 ### Agendamento Do Sync
 
-O `edge-app` nao tem loop interno de sincronizacao. Use a crontab do Linux para executar sync completa no startup/virada de dia e sync incremental antes dos inicios dos horarios padrao UFMA.
+O `edge-app` nao tem loop interno de sincronizacao. Use a crontab do Linux para executar sync snapshot no startup, na virada de dia e antes dos inicios dos horarios padrao UFMA.
 
 Revise as tarefas geradas sem alterar a crontab:
 
@@ -630,9 +557,8 @@ wget https://github.com/opencv/opencv_zoo/raw/main/models/face_recognition_sface
 
 ## Prompts De Referencia
 
-As alteracoes esperadas na API principal e no firmware ficam em documentos separados, em formato de prompt para LLM:
+As alteracoes esperadas na API principal ficam em formato de prompt para LLM:
 
 - [docs/prompt-referencia-api.md](docs/prompt-referencia-api.md)
-- [docs/prompt-referencia-firmware.md](docs/prompt-referencia-firmware.md)
 
 Os diretorios `referencia-api/` e `referencia-firmware/` sao apenas referencia local e nao devem ser editados por este projeto.

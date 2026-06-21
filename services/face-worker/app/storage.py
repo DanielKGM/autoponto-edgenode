@@ -17,7 +17,7 @@ ATTENDANCE_QUEUE_KEY = "queue:eventos_presenca"
 EMBEDDINGS_KEY = "face:embeddings"
 
 
-class RedisRepo:
+class ArmazenamentoRedis:
     def __init__(self):
         self.redis = redis.Redis(
             host=REDIS_HOST,

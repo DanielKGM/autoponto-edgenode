@@ -16,7 +16,6 @@ __pycache__/
 *.pyo
 *.pyd
 *.log
-*.sqlite3
 .pytest_cache
 
 .agents

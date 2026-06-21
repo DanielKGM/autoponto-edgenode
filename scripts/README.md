@@ -9,7 +9,8 @@ Use estes scripts quando precisar disparar um ciclo pelo Linux, sem criar endpoi
 ./scripts/sincronizacao-completa-edge.sh
 ```
 
-A sincronizacao completa executa `python -m app.sync --completa`. A incremental executa `python -m app.sync` usando os cursores locais.
+Os dois scripts executam o mesmo pull snapshot autoritativo (`python -m app.sync`).
+Os nomes permanecem apenas para separar os agendamentos operacionais: startup/virada do dia e disparos antes dos horarios de aula.
 
 ## Agendamentos De Sincronizacao
 
@@ -31,9 +32,9 @@ O script recria apenas o bloco entre `# AUTOPONTO EDGE SYNC BEGIN` e `# AUTOPONT
 
 Tarefas geradas:
 
-- `@reboot`: sync completa apos 60 segundos.
-- `00:00`: sync completa na virada de dia.
-- Slots UFMA: sync incremental antes de cada `horario_inicio` em `data/horarios_ufma_fallback.json`.
+- `@reboot`: sync snapshot apos 60 segundos.
+- `00:00`: sync snapshot na virada de dia.
+- Slots UFMA: sync snapshot antes de cada `horario_inicio` em `data/horarios_ufma_fallback.json`.
 
 Por padrao, os slots sao agendados 5 minutos antes do horario. Para mudar:
 

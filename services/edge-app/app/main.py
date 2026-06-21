@@ -6,15 +6,15 @@ from fastapi import Depends, FastAPI, Header, HTTPException, Request
 
 from app.attendance_consumer import consumir_eventos_presenca
 from app.config import EDGE_SHARED_AUTH, LOG_LEVEL
-from app.db import inicializar_banco
 from app.interscity import PublicadorInterscity
 from app.mqtt import criar_listener_mqtt
-from app.redis_store import enfileirar_frame, fila_frames_cheia
-from app.repository import (
-    buscar_aula_atual_por_dispositivo,
-    buscar_uuid_dispositivo_por_codigo,
-    calcular_contexto_do_dispositivo,
-    reconstruir_cache_redis,
+from app.redis_store import (
+    aula_atual_da_sala,
+    calcular_contexto_dispositivo,
+    enfileirar_frame,
+    fila_frames_cheia,
+    obter_dispositivo_por_codigo,
+    snapshot_redis_valido,
 )
 
 logging.basicConfig(
@@ -26,9 +26,8 @@ logger = logging.getLogger("edge-app")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    inicializar_banco()
-
-    reconstruir_cache_redis()
+    if not snapshot_redis_valido():
+        logger.warning("snapshot redis ausente ou expirado")
     stop_event = asyncio.Event()
 
     publicador_interscity = PublicadorInterscity()
@@ -73,17 +72,19 @@ def obter_contexto(
 ):
     if not x_device_id:
         raise HTTPException(status_code=400, detail="missing X-Device-Id")
+    if not snapshot_redis_valido():
+        logger.info("context empty device=%s reason=snapshot_expired", x_device_id)
+        return {"lesson_name": "", "msRemaining": 0, "msForNext": 0}
 
-    contexto = calcular_contexto_do_dispositivo(x_device_id)
+    contexto = calcular_contexto_dispositivo(x_device_id)
     logger.info(
-        "context device=%s sala=%s aula=%s msRemaining=%s msForNext=%s",
+        "context device=%s lesson=%s msRemaining=%s msForNext=%s",
         x_device_id,
-        contexto.sala_id,
-        contexto.aula_id,
-        contexto.ms_remaining,
-        contexto.ms_for_next,
+        contexto["lesson_name"],
+        contexto["msRemaining"],
+        contexto["msForNext"],
     )
-    return contexto.para_payload()
+    return contexto
 
 
 @app.post("/frame")
@@ -98,13 +99,16 @@ async def receber_frame(
     tipo_conteudo = request.headers.get("content-type", "")
     if tipo_conteudo != "image/jpeg":
         raise HTTPException(status_code=415, detail="expected image/jpeg")
+    if not snapshot_redis_valido():
+        logger.info("frame ignored device=%s reason=snapshot_expired", x_device_id)
+        return {"ok": False, "reason": "snapshot_expired"}
 
-    dispositivo_uuid = buscar_uuid_dispositivo_por_codigo(x_device_id)
-    if not dispositivo_uuid:
+    dispositivo = obter_dispositivo_por_codigo(x_device_id)
+    if not dispositivo:
         logger.info("frame ignored device=%s reason=unknown_device", x_device_id)
         return {"ok": False, "reason": "unknown_device"}
 
-    aula = buscar_aula_atual_por_dispositivo(x_device_id)
+    aula = aula_atual_da_sala(dispositivo["sala_id"])
     if not aula:
         logger.info("frame ignored device=%s reason=no_current_aula", x_device_id)
         return {"ok": False, "reason": "no_current_aula"}
@@ -118,17 +122,17 @@ async def receber_frame(
         raise HTTPException(status_code=400, detail="empty body")
 
     tamanho_fila = enfileirar_frame(
-        dispositivo_uuid,
+        dispositivo["dispositivo_id"],
         x_device_id,
-        aula.sala_id,
-        aula.id,
+        aula["sala_id"],
+        aula["id"],
         corpo,
     )
     logger.info(
         "frame accepted device=%s sala=%s aula=%s bytes=%d queue_len=%d",
         x_device_id,
-        aula.sala_id,
-        aula.id,
+        aula["sala_id"],
+        aula["id"],
         len(corpo),
         tamanho_fila,
     )

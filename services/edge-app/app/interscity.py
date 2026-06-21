@@ -14,7 +14,7 @@ from app.config import (
     INTERSCITY_WORKERS,
     RESOURCE_ADAPTOR_PATH,
 )
-from app.redis_store import obter_uuid_interscity_por_codigo
+from app.redis_store import obter_dispositivo_por_codigo
 
 logger = logging.getLogger(__name__)
 
@@ -44,7 +44,8 @@ def publicar_capacidades_dispositivo(
     capacidades: dict,
     timestamp: str | None = None,
 ) -> bool:
-    recurso_uuid = obter_uuid_interscity_por_codigo(dispositivo_codigo)
+    dispositivo = obter_dispositivo_por_codigo(dispositivo_codigo)
+    recurso_uuid = dispositivo.get("interscity_uuid") if dispositivo else None
     if not recurso_uuid or not INTERSCITY_API_URL or not RESOURCE_ADAPTOR_PATH:
         return False
 

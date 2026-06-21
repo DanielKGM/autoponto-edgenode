@@ -4,8 +4,12 @@ import logging
 import msgpack
 
 from app.mqtt import publicar_comando
-from app.redis_store import QUEUE_ATTENDANCE_EVENTS, obter_redis
-from app.repository import converter_data_hora, salvar_evento_presenca
+from app.redis_store import (
+    QUEUE_ATTENDANCE_EVENTS,
+    converter_data_hora,
+    obter_redis,
+    salvar_evento_presenca,
+)
 from app.sync import sincronizar_presencas_pendentes
 
 logger = logging.getLogger(__name__)

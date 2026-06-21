@@ -7,4 +7,4 @@ RAIZ_REPOSITORIO="$(cd "${DIRETORIO_SCRIPT}/.." && pwd)"
 cd "${RAIZ_REPOSITORIO}"
 mkdir -p data/logs
 
-docker compose exec -T edge-app python -m app.sync --completa
+docker compose exec -T edge-app python -m app.sync
