@@ -8,7 +8,7 @@ __pycache__
 !/.env.example
 data/**
 !data/
-!data/horarios_ufma_fallback.json
+!data/horarios_ufma.json
 *.npy
 infra/mosquitto/passwd
 docker-compose.override.yml

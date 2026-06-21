@@ -3,7 +3,7 @@ set -Eeuo pipefail
 
 DIRETORIO_SCRIPT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 RAIZ_REPOSITORIO="$(cd "${DIRETORIO_SCRIPT}/.." && pwd)"
-CAMINHO_JSON="${RAIZ_REPOSITORIO}/data/horarios_ufma_fallback.json"
+CAMINHO_JSON="${RAIZ_REPOSITORIO}/data/horarios_ufma.json"
 ANTECEDENCIA_MINUTOS="${ANTECEDENCIA_MINUTOS:-5}"
 SIMULAR=0
 AGENDAR_REBOOT=1
@@ -38,6 +38,11 @@ if [[ ! -f "${CAMINHO_JSON}" ]]; then
   exit 1
 fi
 
+if [[ ! -x "${RAIZ_REPOSITORIO}/scripts/sincronizacao-edge.sh" ]]; then
+  echo "Script de sincronizacao nao encontrado ou sem permissao de execucao: ${RAIZ_REPOSITORIO}/scripts/sincronizacao-edge.sh" >&2
+  exit 1
+fi
+
 BLOCO_AGENDAMENTOS="$(
   python3 - "${CAMINHO_JSON}" "${ANTECEDENCIA_MINUTOS}" "${RAIZ_REPOSITORIO}" "${AGENDAR_REBOOT}" <<'PY'
 import json
@@ -51,15 +56,13 @@ antecedencia_minutos = int(antecedencia_texto)
 agendar_reboot = agendar_reboot_texto == "1"
 horarios = json.loads(Path(caminho_json).read_text(encoding="utf-8"))
 
-script_completo = shlex.quote(f"{raiz_repositorio}/scripts/sincronizacao-completa-edge.sh")
-script_incremental = shlex.quote(f"{raiz_repositorio}/scripts/sincronizacao-incremental-edge.sh")
-log_completo = shlex.quote(f"{raiz_repositorio}/data/logs/sincronizacao-completa.log")
-log_incremental = shlex.quote(f"{raiz_repositorio}/data/logs/sincronizacao-incremental.log")
+script_sync = shlex.quote(f"{raiz_repositorio}/scripts/sincronizacao-edge.sh")
+log_sync = shlex.quote(f"{raiz_repositorio}/data/logs/sincronizacao-edge.log")
 
 print("# AUTOPONTO EDGE SYNC BEGIN")
 if agendar_reboot:
-    print(f"@reboot sleep 300 && {script_completo} >> {log_completo} 2>&1")
-print(f"0 0 * * * {script_completo} >> {log_completo} 2>&1")
+    print(f"@reboot sleep 300 && {script_sync} >> {log_sync} 2>&1")
+print(f"0 0 * * * {script_sync} >> {log_sync} 2>&1")
 
 por_horario: dict[tuple[int, int], list[str]] = {}
 for item in horarios:
@@ -73,7 +76,7 @@ for item in horarios:
 for (hora, minuto), codigos in sorted(por_horario.items()):
     comentario = ",".join(sorted(codigos))
     print(
-        f"{minuto} {hora} * * * {script_incremental} >> {log_incremental} 2>&1 "
+        f"{minuto} {hora} * * * {script_sync} >> {log_sync} 2>&1 "
         f"# slots {comentario}, antecedencia {antecedencia_minutos}min"
     )
 print("# AUTOPONTO EDGE SYNC END")

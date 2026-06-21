@@ -216,7 +216,7 @@ Nao ha MQTT negativo. Falha de decode, sem rosto, aluno desconhecido ou aluno fo
 
 ## Sincronizacao Com A API AutoPonto
 
-O edge sincroniza o snapshot Redis do dia e as presencas com a API principal. Horarios padrao UFMA nao sao buscados na API: o agendamento usa somente `data/horarios_ufma_fallback.json`.
+O edge sincroniza o snapshot Redis do dia e as presencas com a API principal. Horarios padrao UFMA nao sao buscados na API: o agendamento usa somente `data/horarios_ufma.json`.
 Ao registrar uma presenca local, o edge tenta enviar esse evento imediatamente. Se o envio falhar, o evento permanece `pending` e volta a ser enviado pelos ciclos agendados de sincronizacao.
 
 Autenticacao:
@@ -301,11 +301,10 @@ Resposta esperada:
 
 ### Sync Manual
 
-Os dois scripts executam o mesmo pull snapshot autoritativo. Os nomes apenas separam os usos operacionais de agendamento.
+O script executa o pull snapshot autoritativo usado tanto manualmente quanto pelos agendamentos.
 
 ```bash
-./scripts/sincronizacao-incremental-edge.sh
-./scripts/sincronizacao-completa-edge.sh
+./scripts/sincronizacao-edge.sh
 ```
 
 ## Telemetria InterSCity
@@ -546,7 +545,7 @@ Grave ou atualize o bloco de tarefas do AutoPonto Edge:
 ./scripts/atualizar-agendamentos-sincronizacao-edge.sh
 ```
 
-O script le `data/horarios_ufma_fallback.json` e recria somente o bloco entre `# AUTOPONTO EDGE SYNC BEGIN` e `# AUTOPONTO EDGE SYNC END`. Ele nao busca horarios padrao UFMA na API.
+O script le `data/horarios_ufma.json` e recria somente o bloco entre `# AUTOPONTO EDGE SYNC BEGIN` e `# AUTOPONTO EDGE SYNC END`. Ele nao busca horarios padrao UFMA na API.
 
 ## Modelos ONNX
 

@@ -31,7 +31,7 @@ venv/
 data/**/*
 !data/**/
 !data/models/.gitkeep
-!data/horarios_ufma_fallback.json
+!data/horarios_ufma.json
 
 # =========================
 # DOCKER
