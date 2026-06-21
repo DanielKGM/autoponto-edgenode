@@ -6,7 +6,7 @@ import paho.mqtt.client as mqtt
 
 from app.config import MQTT_HOST, MQTT_PASS, MQTT_PORT, MQTT_USER
 
-registrador = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 
 LOG_CAPABILITY_KEYS = (
     "heap_free",
@@ -27,7 +27,7 @@ def criar_listener_mqtt(
     cliente.username_pw_set(MQTT_USER, MQTT_PASS)
 
     def on_connect(client, userdata, flags, reason_code, properties=None):
-        registrador.info("mqtt listener connected rc=%s", reason_code)
+        logger.info("mqtt listener connected rc=%s", reason_code)
         client.subscribe("log/+")
 
     def on_message(client, userdata, msg):
@@ -40,14 +40,14 @@ def criar_listener_mqtt(
         try:
             dados = json.loads(payload)
         except json.JSONDecodeError:
-            registrador.warning(
+            logger.warning(
                 "log de dispositivo invalido dispositivo_codigo=%s payload=%s",
                 dispositivo_codigo,
                 payload,
             )
             return
         if not isinstance(dados, dict):
-            registrador.warning(
+            logger.warning(
                 "log de dispositivo sem objeto json dispositivo_codigo=%s payload=%s",
                 dispositivo_codigo,
                 payload,
@@ -60,7 +60,7 @@ def criar_listener_mqtt(
         if tipo == "status":
             status = str(dados.get("status", "")).strip().lower()
             if not status:
-                registrador.warning(
+                logger.warning(
                     "status de dispositivo invalido dispositivo_codigo=%s payload=%s",
                     dispositivo_codigo,
                     dados,
@@ -71,7 +71,7 @@ def criar_listener_mqtt(
                 {"status": status},
                 timestamp,
             )
-            registrador.info(
+            logger.info(
                 "status de dispositivo recebido dispositivo_codigo=%s status=%s",
                 dispositivo_codigo,
                 status,
@@ -84,7 +84,7 @@ def criar_listener_mqtt(
                 {"presenca": dados.get("presenca", True)},
                 timestamp,
             )
-            registrador.info(
+            logger.info(
                 "presenca pir recebida dispositivo_codigo=%s", dispositivo_codigo
             )
             return
@@ -95,13 +95,13 @@ def criar_listener_mqtt(
                 {chave: dados.get(chave) for chave in LOG_CAPABILITY_KEYS},
                 timestamp,
             )
-            registrador.info(
+            logger.info(
                 "metricas de dispositivo recebidas dispositivo_codigo=%s",
                 dispositivo_codigo,
             )
             return
 
-        registrador.warning(
+        logger.warning(
             "tipo de log desconhecido dispositivo_codigo=%s kind=%s",
             dispositivo_codigo,
             tipo,
@@ -120,4 +120,4 @@ def publicar_comando(
 ) -> None:
     topic = f"cmd/{dispositivo_codigo}"
     client.publish(topic, json.dumps(payload, ensure_ascii=False), qos=1, retain=False)
-    registrador.info("published mqtt command to %s", topic)
+    logger.info("published mqtt command to %s", topic)

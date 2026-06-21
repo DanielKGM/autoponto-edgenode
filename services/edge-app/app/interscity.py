@@ -16,7 +16,7 @@ from app.config import (
 )
 from app.redis_store import obter_uuid_interscity_por_codigo
 
-registrador = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)
 
 
 def _timestamp(valor: str | None) -> str:
@@ -76,7 +76,7 @@ def publicar_capacidades_dispositivo(
         resposta = urlopen(requisicao, timeout=INTERSCITY_TIMEOUT_SECONDS)
         return True
     except (TimeoutError, SocketTimeout, HTTPError, URLError, OSError) as exc:
-        registrador.warning(
+        logger.warning(
             "falha ao publicar no interscity dispositivo_codigo=%s resource=%s error=%s",
             dispositivo_codigo,
             recurso_uuid,
@@ -127,7 +127,7 @@ class PublicadorInterscity:
         try:
             self._fila.put_nowait((dispositivo_codigo, capacidades, timestamp))
         except Full:
-            registrador.warning(
+            logger.warning(
                 "fila interscity cheia; publicacao descartada dispositivo_codigo=%s",
                 dispositivo_codigo,
             )
@@ -137,9 +137,7 @@ class PublicadorInterscity:
     def _executar(self) -> None:
         while not self._parar.is_set() or not self._fila.empty():
             try:
-                dispositivo_codigo, capacidades, timestamp = self._fila.get(
-                    timeout=0.2
-                )
+                dispositivo_codigo, capacidades, timestamp = self._fila.get(timeout=0.2)
             except Empty:
                 continue
 
@@ -150,7 +148,7 @@ class PublicadorInterscity:
                     timestamp,
                 )
             except Exception:
-                registrador.exception(
+                logger.exception(
                     "erro inesperado no worker interscity dispositivo_codigo=%s",
                     dispositivo_codigo,
                 )
