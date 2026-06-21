@@ -58,7 +58,7 @@ log_incremental = shlex.quote(f"{raiz_repositorio}/data/logs/sincronizacao-incre
 
 print("# AUTOPONTO EDGE SYNC BEGIN")
 if agendar_reboot:
-    print(f"@reboot sleep 60 && {script_completo} >> {log_completo} 2>&1")
+    print(f"@reboot sleep 300 && {script_completo} >> {log_completo} 2>&1")
 print(f"0 0 * * * {script_completo} >> {log_completo} 2>&1")
 
 por_horario: dict[tuple[int, int], list[str]] = {}
