@@ -5,18 +5,20 @@ from collections.abc import Callable
 import paho.mqtt.client as mqtt
 
 from app.config import MQTT_HOST, MQTT_PASS, MQTT_PORT, MQTT_USER
+from app.metricas_avg_us import registrar_metricas_avg_us
 
 logger = logging.getLogger(__name__)
 
 LOG_CAPABILITY_KEYS = (
     "heap_free",
-    "psram_free",
-    "now_ms",
-    "rssi",
     "heap_min",
+    "heap_max",
+    "psram_free",
+    "psram_min",
+    "psram_max",
+    "rssi",
+    "post_max_ms",
     "lesson",
-    "remaining_ms",
-    "next_ms",
 )
 
 
@@ -90,6 +92,9 @@ def criar_listener_mqtt(
             return
 
         if tipo == "metrics":
+            avg_us = dados.get("avg_us")
+            if isinstance(avg_us, dict):
+                registrar_metricas_avg_us(dispositivo_codigo, avg_us)
             enfileirar_publicacao_interscity(
                 dispositivo_codigo,
                 {chave: dados.get(chave) for chave in LOG_CAPABILITY_KEYS},

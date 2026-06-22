@@ -54,6 +54,10 @@ services:
       INTERSCITY_QUEUE_MAX: "${INTERSCITY_QUEUE_MAX:-1000}"
       INTERSCITY_WORKERS: "${INTERSCITY_WORKERS:-1}"
       INTERSCITY_TIMEOUT_SECONDS: "${INTERSCITY_TIMEOUT_SECONDS:-5}"
+      METRICAS_AVG_US_PATH: "${METRICAS_AVG_US_PATH:-/data/logs/metricas_avg_us.txt}"
+      METRICAS_AVG_US_DISPOSITIVO_CODIGO: "${METRICAS_AVG_US_DISPOSITIVO_CODIGO:-}"
+    volumes:
+      - ./data:/data
     depends_on:
       - redis
       - mosquitto

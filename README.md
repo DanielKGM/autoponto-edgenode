@@ -370,6 +370,8 @@ Payload InterSCity gerado:
 - `remaining_ms`
 - `next_ms`
 
+Se `METRICAS_AVG_US_DISPOSITIVO_CODIGO` estiver configurado e o payload desse dispositivo tiver `avg_us`, o edge atualiza o TXT local definido por `METRICAS_AVG_US_PATH` (`/data/logs/metricas_avg_us.txt` por padrao). O arquivo guarda `registros`, `periodo_inicio`, `periodo_fim` e a media acumulada dos campos `loop`, `mqtt`, `network`, `camera` e `display`; cada novo valor faz `(valor_antigo + valor_novo) / 2`. Com `METRICAS_AVG_US_DISPOSITIVO_CODIGO` vazio, esse TXT nao e gerado.
+
 `state` nao e publicado em logs porque representa status. O firmware tambem deve remover `state` do payload de log.
 
 `kind=pir` e publicado quando o sensor PIR detectar presenca e vira a capacidade `presenca`. Esse evento nao vem da funcao periodica de metricas.
@@ -386,7 +388,14 @@ Exemplo de `kind=metrics`:
   "heap_min": 123456,
   "lesson": "AMBIENTAL",
   "remaining_ms": 60000,
-  "next_ms": 0
+  "next_ms": 0,
+  "avg_us": {
+    "loop": 100,
+    "mqtt": 200,
+    "network": 300,
+    "camera": 400,
+    "display": 500
+  }
 }
 ```
 
