@@ -18,7 +18,6 @@ LOG_CAPABILITY_KEYS = (
     "psram_max",
     "rssi",
     "post_max_ms",
-    "lesson",
 )
 
 
@@ -92,6 +91,17 @@ def criar_listener_mqtt(
             return
 
         if tipo == "metrics":
+            idle = dados.get("idle")
+
+            if isinstance(idle, bool) and idle:
+
+                logger.info(
+                    "metricas de dispositivo recusadas (idle) dispositivo_codigo=%s",
+                    dispositivo_codigo,
+                )
+
+                return
+
             avg_us = dados.get("avg_us")
             if isinstance(avg_us, dict):
                 registrar_metricas_avg_us(dispositivo_codigo, avg_us)
