@@ -109,7 +109,15 @@ async def executar_sincronizacao(
             params={"node_id": NODE_ID},
         )
         _validar_resposta_http(resposta_pull, "pull")
-        aplicar_payload_sincronizacao(resposta_pull.json())
+
+        payload = resposta_pull.json()
+
+        logger.info(
+            "payload recebido na sincronizacao=%s",
+            payload,
+        )
+
+        aplicar_payload_sincronizacao(payload)
 
         if enviar_presencas:
             await sincronizar_presencas_pendentes()

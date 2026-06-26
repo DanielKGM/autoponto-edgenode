@@ -17,11 +17,23 @@ logger = logging.getLogger(__name__)
 
 def montar_mensagem_presenca(evento_salvo: dict) -> str:
     partes_nome = evento_salvo["aluno_nome"].split()
-    aluno_nome = " ".join(partes_nome[:2]) or evento_salvo["aluno_nome"]
+    conectivos = {"da", "das", "de", "do", "dos", "e"}
+
+    limite_nome = 2
+
+    while (
+        limite_nome < len(partes_nome)
+        and partes_nome[limite_nome - 1].lower() in conectivos
+    ):
+        limite_nome += 1
+
+    aluno_nome = " ".join(partes_nome[:limite_nome]) or evento_salvo["aluno_nome"]
+
     reconhecido_em = converter_data_hora(evento_salvo["reconhecido_em"]).strftime(
         "%H:%M"
     )
-    return f"{aluno_nome} - registrado {reconhecido_em}"
+
+    return f"{aluno_nome} ({reconhecido_em})"
 
 
 def processar_evento_presenca(evento: dict, mqtt_client) -> dict:
