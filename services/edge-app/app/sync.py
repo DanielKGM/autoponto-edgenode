@@ -146,14 +146,7 @@ async def executar_sincronizacao(
         )
         _validar_resposta_http(resposta_pull, "pull")
 
-        payload = resposta_pull.json()
-
-        logger.info(
-            "payload recebido na sincronizacao=%s",
-            payload,
-        )
-
-        dispositivo_codigos = aplicar_payload_sincronizacao(payload)
+        dispositivo_codigos = aplicar_payload_sincronizacao(resposta_pull.json())
         publicar_fetch_apos_sync(dispositivo_codigos)
 
         if enviar_presencas:
