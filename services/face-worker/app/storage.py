@@ -85,10 +85,5 @@ class ArmazenamentoRedis:
 
     def _decodificar_registro_embedding(self, blob: bytes) -> tuple[str, np.ndarray]:
         registro = msgpack.unpackb(blob, raw=False)
-        payload_embedding = msgpack.unpackb(registro["embedding"], raw=False)
-        dados = payload_embedding["data"]
-        if isinstance(dados, list):
-            embedding = np.asarray(dados, dtype=np.float32)
-        else:
-            embedding = np.frombuffer(dados, dtype=np.float32)
-        return registro["alunoId"], embedding.reshape(payload_embedding["shape"])
+        embedding = np.asarray(registro["embedding"], dtype=np.float32)
+        return registro["alunoId"], embedding.reshape(1, -1)

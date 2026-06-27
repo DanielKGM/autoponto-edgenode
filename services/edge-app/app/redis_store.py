@@ -125,12 +125,12 @@ def _validar_mapa(nome: str, valor) -> dict:
 
 
 def _registro_embedding_para_redis(registro: dict) -> bytes:
-    aluno_id = registro.get("alunoId") or registro.get("aluno_id")
+    aluno_id = registro.get("alunoId")
     embedding = registro.get("embedding")
     if not aluno_id or embedding is None:
         raise ValueError("embedding facial deve incluir alunoId e embedding")
-    if not isinstance(embedding, (bytes, bytearray)):
-        embedding = _empacotar(embedding)
+    if not isinstance(embedding, list):
+        raise ValueError("embedding facial deve ser uma lista numerica")
     return _empacotar({"alunoId": aluno_id, "embedding": embedding})
 
 

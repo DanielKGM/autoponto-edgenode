@@ -1,5 +1,6 @@
 import logging
 from datetime import datetime
+from math import isfinite
 from pathlib import Path
 from threading import Lock
 
@@ -11,7 +12,11 @@ AVG_US_KEYS = ("loop", "mqtt", "network", "camera", "display")
 _lock = Lock()
 
 
-def registrar_metricas_avg_us(dispositivo_codigo: str, avg_us: dict) -> None:
+def registrar_metricas_avg_us(
+    dispositivo_codigo: str,
+    avg_us: dict,
+    avg_count: dict,
+) -> None:
     if (
         not METRICAS_AVG_US_DISPOSITIVO_CODIGO
         or dispositivo_codigo != METRICAS_AVG_US_DISPOSITIVO_CODIGO
@@ -21,9 +26,18 @@ def registrar_metricas_avg_us(dispositivo_codigo: str, avg_us: dict) -> None:
     valores = {}
     for chave in AVG_US_KEYS:
         valor = avg_us.get(chave)
-        if isinstance(valor, bool) or not isinstance(valor, (int, float)):
+        peso = avg_count.get(chave)
+        if (
+            isinstance(valor, bool)
+            or not isinstance(valor, (int, float))
+            or not isfinite(float(valor))
+            or isinstance(peso, bool)
+            or not isinstance(peso, (int, float))
+            or not isfinite(float(peso))
+            or float(peso) <= 0
+        ):
             continue
-        valores[chave] = float(valor)
+        valores[chave] = (float(valor), float(peso))
 
     if not valores:
         return
@@ -38,22 +52,33 @@ def registrar_metricas_avg_us(dispositivo_codigo: str, avg_us: dict) -> None:
             periodo_inicio = estado.get("periodo_inicio") or agora
 
             linhas = [
+                "unidade=microssegundos",
                 f"registros={registros}",
                 f"periodo_inicio={periodo_inicio}",
                 f"periodo_fim={agora}",
             ]
             for chave in AVG_US_KEYS:
-                valor_novo = valores.get(chave)
-                valor_antigo = estado.get(chave)
-                if valor_novo is None and valor_antigo is None:
+                amostra_nova = valores.get(chave)
+                media_antiga = _float_estado(estado.get(chave))
+                peso_antigo = _float_estado(estado.get(f"{chave}_count")) or 0.0
+
+                if amostra_nova is None and media_antiga is None:
                     continue
-                if valor_novo is None:
-                    media = float(valor_antigo)
-                elif valor_antigo is None:
-                    media = valor_novo
+                if amostra_nova is None:
+                    media = media_antiga
+                    peso_total = peso_antigo
+                elif media_antiga is None or peso_antigo <= 0:
+                    media, peso_total = amostra_nova
                 else:
-                    media = (float(valor_antigo) + valor_novo) / 2
+                    media_nova, peso_novo = amostra_nova
+                    peso_total = peso_antigo + peso_novo
+                    media = (
+                        (media_antiga * peso_antigo) + (media_nova * peso_novo)
+                    ) / peso_total
+
                 linhas.append(f"{chave}={media:.2f}")
+                if peso_total > 0:
+                    linhas.append(f"{chave}_count={_formatar_peso(peso_total)}")
 
             caminho.parent.mkdir(parents=True, exist_ok=True)
             temporario = caminho.with_suffix(f"{caminho.suffix}.tmp")
@@ -76,3 +101,19 @@ def _ler_estado(caminho: Path) -> dict:
         chave, valor = linha.split("=", 1)
         dados[chave.strip()] = valor.strip()
     return dados
+
+
+def _float_estado(valor: str | None) -> float | None:
+    if valor is None:
+        return None
+    try:
+        numero = float(valor)
+    except ValueError:
+        return None
+    return numero if isfinite(numero) else None
+
+
+def _formatar_peso(valor: float) -> str:
+    if valor.is_integer():
+        return str(int(valor))
+    return f"{valor:.6g}"

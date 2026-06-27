@@ -83,7 +83,7 @@ tipo: hash
 campo: "embedding-uuid"
 valor: msgpack({
   "alunoId": "aluno-uuid",
-  "embedding": "<blob-msgpack-do-vetor>"
+  "embedding": [0.01, 0.02]
 })
 
 dispositivos:por_codigo
@@ -223,7 +223,7 @@ Autenticacao:
 
 ```http
 Authorization: NodeToken <AUTOPONTO_API_TOKEN>
-X-Node-Id: <NODE_ID>
+X-Node-Id: <NODE_UUID>
 ```
 
 ### Pull
@@ -231,7 +231,7 @@ X-Node-Id: <NODE_ID>
 Endpoint:
 
 ```http
-GET /edge/pull/?node_id=<NODE_ID>
+GET /edge/pull/?node_id=<NODE_UUID>
 ```
 
 Payload esperado:
@@ -263,7 +263,14 @@ Campos esperados em `cache_redis`:
 - `aulas_por_sala`: listas de aulas com `id`, `nome`, `turma_id`, `sala_id`, `inicio`, `fim`, `status`.
 - `alunos_por_aula`: mapa `aula_id -> [aluno_id]`.
 - `alunos_por_id`: mapa `aluno_id -> {"nome": "..."}`.
-- `embeddings_faciais`: mapa `embedding_id -> {"alunoId": "...", "embedding": {"dtype": "float32", "shape": [1, N], "data": [...]}}`.
+- `embeddings_faciais`: mapa `embedding_id -> {"alunoId": "...", "embedding_encrypted": "..."}`. O edge descriptografa com `FACE_EMBEDDING_ENCRYPTION_KEY`, valida todos os embeddings e so entao substitui o snapshot local.
+
+Biometria facial:
+
+- O backend nao envia `embedding.data`, `dtype` nem `shape`.
+- `FACE_EMBEDDING_ENCRYPTION_KEY` deve ser a mesma chave Fernet usada no backend.
+- Se a chave estiver ausente, invalida ou algum embedding falhar, o pull falha e o snapshot Redis anterior e mantido.
+- Gere uma chave com `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`.
 
 ### Push De Presencas
 
@@ -370,7 +377,7 @@ Payload InterSCity gerado:
 - `remaining_ms`
 - `next_ms`
 
-Se `METRICAS_AVG_US_DISPOSITIVO_CODIGO` estiver configurado e o payload desse dispositivo tiver `avg_us`, o edge atualiza o TXT local definido por `METRICAS_AVG_US_PATH` (`/data/logs/metricas_avg_us.txt` por padrao). O arquivo guarda `registros`, `periodo_inicio`, `periodo_fim` e a media acumulada dos campos `loop`, `mqtt`, `network`, `camera` e `display`; cada novo valor faz `(valor_antigo + valor_novo) / 2`. Com `METRICAS_AVG_US_DISPOSITIVO_CODIGO` vazio, esse TXT nao e gerado.
+Se `METRICAS_AVG_US_DISPOSITIVO_CODIGO` estiver configurado e o payload desse dispositivo tiver `avg_us` e `avg_count`, o edge atualiza o TXT local definido por `METRICAS_AVG_US_PATH` (`/data/logs/metricas_avg_us.txt` por padrao). O arquivo registra `unidade=microssegundos`, `registros`, periodo e a media ponderada dos campos `loop`, `mqtt`, `network`, `camera` e `display`, usando `avg_count` como peso de cada tarefa. Com `METRICAS_AVG_US_DISPOSITIVO_CODIGO` vazio, esse TXT nao e gerado.
 
 `state` nao e publicado em logs porque representa status. O firmware tambem deve remover `state` do payload de log.
 

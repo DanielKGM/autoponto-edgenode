@@ -2,7 +2,9 @@ import argparse
 import asyncio
 import logging
 
-from app.config import AUTOPONTO_API_TOKEN, AUTOPONTO_API_URL, NODE_ID
+from app.config import AUTOPONTO_API_TOKEN, AUTOPONTO_API_URL, NODE_UUID
+from app.face_embeddings import preparar_cache_redis_com_embeddings_descriptografados
+from app.mqtt import publicar_fetch_dispositivos
 from app.redis_store import (
     marcar_eventos_presenca_sincronizados,
     obter_eventos_presenca_pendentes,
@@ -14,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 
 def _cabecalhos_autenticacao() -> dict[str, str]:
-    cabecalhos = {"X-Node-Id": NODE_ID}
+    cabecalhos = {"X-Node-Id": NODE_UUID}
     if AUTOPONTO_API_TOKEN:
         cabecalhos["Authorization"] = f"NodeToken {AUTOPONTO_API_TOKEN}"
     return cabecalhos
@@ -36,7 +38,25 @@ def _validar_resposta_http(resposta, operacao: str) -> None:
         raise
 
 
-def aplicar_payload_sincronizacao(payload: dict) -> None:
+def _codigos_dispositivos_do_cache(cache_redis: dict) -> list[str]:
+    dispositivos = cache_redis.get("dispositivos_por_codigo", {})
+    if not isinstance(dispositivos, dict):
+        return []
+
+    codigos = []
+    vistos = set()
+    for chave, registro in dispositivos.items():
+        codigo = str(chave).strip() if chave is not None else ""
+        if not codigo and isinstance(registro, dict):
+            codigo = str(registro.get("dispositivo_codigo", "")).strip()
+        if not codigo or codigo in vistos:
+            continue
+        vistos.add(codigo)
+        codigos.append(codigo)
+    return codigos
+
+
+def aplicar_payload_sincronizacao(payload: dict) -> list[str]:
     cache_redis = payload.get("cache_redis")
     snapshot_data = payload.get("snapshot_data")
     synced_at = payload.get("synced_at")
@@ -48,7 +68,23 @@ def aplicar_payload_sincronizacao(payload: dict) -> None:
     if not synced_at:
         raise ValueError("payload de sincronizacao sem synced_at")
 
+    dispositivo_codigos = _codigos_dispositivos_do_cache(cache_redis)
+    cache_redis = preparar_cache_redis_com_embeddings_descriptografados(cache_redis)
     substituir_snapshot_redis(cache_redis, str(snapshot_data), str(synced_at))
+    return dispositivo_codigos
+
+
+def publicar_fetch_apos_sync(dispositivo_codigos: list[str]) -> None:
+    try:
+        enviados = publicar_fetch_dispositivos(dispositivo_codigos)
+        if enviados:
+            logger.info("fetch mqtt publicado para %d dispositivos", enviados)
+    except Exception as exc:
+        logger.warning(
+            "fetch mqtt pos-sync falhou dispositivos=%d error=%s",
+            len(dispositivo_codigos),
+            exc,
+        )
 
 
 async def sincronizar_presencas_pendentes(ids: list[str] | None = None) -> bool:
@@ -68,7 +104,7 @@ async def sincronizar_presencas_pendentes(ids: list[str] | None = None) -> bool:
                 f"{AUTOPONTO_API_URL}/edge/attendance/",
                 headers=_cabecalhos_autenticacao(),
                 json={
-                    "node_id": NODE_ID,
+                    "node_id": NODE_UUID,
                     "eventos": [
                         {
                             "id": presenca["id"],
@@ -106,7 +142,7 @@ async def executar_sincronizacao(
         resposta_pull = await cliente.get(
             f"{AUTOPONTO_API_URL}/edge/pull/",
             headers=_cabecalhos_autenticacao(),
-            params={"node_id": NODE_ID},
+            params={"node_id": NODE_UUID},
         )
         _validar_resposta_http(resposta_pull, "pull")
 
@@ -117,7 +153,8 @@ async def executar_sincronizacao(
             payload,
         )
 
-        aplicar_payload_sincronizacao(payload)
+        dispositivo_codigos = aplicar_payload_sincronizacao(payload)
+        publicar_fetch_apos_sync(dispositivo_codigos)
 
         if enviar_presencas:
             await sincronizar_presencas_pendentes()

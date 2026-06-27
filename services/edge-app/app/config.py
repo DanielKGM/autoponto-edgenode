@@ -31,9 +31,13 @@ INTERSCITY_QUEUE_MAX = _int_env("INTERSCITY_QUEUE_MAX", 1000)
 INTERSCITY_WORKERS = _int_env("INTERSCITY_WORKERS", 1)
 INTERSCITY_TIMEOUT_SECONDS = _int_env("INTERSCITY_TIMEOUT_SECONDS", 5)
 
-NODE_ID = os.getenv("NODE_ID", "edge-node")
+NODE_UUID = os.getenv("NODE_UUID", "edge-node")
 AUTOPONTO_API_URL = os.getenv("AUTOPONTO_API_URL", "").strip().rstrip("/")
 AUTOPONTO_API_TOKEN = os.getenv("AUTOPONTO_API_TOKEN", "").strip()
+FACE_EMBEDDING_ENCRYPTION_KEY = os.getenv(
+    "FACE_EMBEDDING_ENCRYPTION_KEY",
+    "",
+).strip()
 INTERSCITY_API_URL = os.getenv("INTERSCITY_API_URL", "").strip().rstrip("/")
 RESOURCE_ADAPTOR_PATH = os.getenv(
     "RESOURCE_ADAPTOR_PATH",
