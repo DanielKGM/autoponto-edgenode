@@ -6,5 +6,6 @@ COPY ./services/face-worker/requirements.txt /app/requirements.txt
 RUN pip install --no-cache-dir -r /app/requirements.txt
 
 COPY ./services/face-worker/app /app/app
+COPY ./tcc_evidencias.py /app/tcc_evidencias.py
 
 CMD ["python", "-u", "-m", "app.main"]

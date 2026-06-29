@@ -23,6 +23,10 @@ METRICAS_AVG_US_PATH = os.getenv(
     "METRICAS_AVG_US_PATH",
     "/data/logs/metricas_avg_us.txt",
 )
+METRICAS_AVG_US_AMOSTRAS_PATH = os.getenv(
+    "METRICAS_AVG_US_AMOSTRAS_PATH",
+    "/data/logs/metricas_avg_us_amostras.csv",
+)
 METRICAS_AVG_US_DISPOSITIVO_CODIGO = os.getenv(
     "METRICAS_AVG_US_DISPOSITIVO_CODIGO",
     "",

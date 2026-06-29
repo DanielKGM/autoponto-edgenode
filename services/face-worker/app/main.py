@@ -1,8 +1,10 @@
 import logging
 import os
+from datetime import datetime, timezone
 
 from app.recognition_service import ServicoReconhecimento
 from app.storage import ArmazenamentoRedis
+from tcc_evidencias import registrar_tempo
 
 
 def processar_frame(
@@ -34,6 +36,15 @@ def processar_frame(
         len(frame_bytes),
         recebido_em,
     )
+    espera_ms = _tempo_espera_processamento_ms(recebido_em)
+    if espera_ms is not None:
+        registrar_tempo(
+            "frame_espera_processamento_ms",
+            espera_ms,
+            "face-worker",
+            origem=dispositivo_codigo or dispositivo_id,
+            detalhes={"aula_id": aula_id, "sala_id": sala_id},
+        )
 
     resultado = reconhecimento.reconhecer(frame_bytes, aula_id)
     if not resultado["ok"]:
@@ -61,6 +72,18 @@ def processar_frame(
         resultado["score"],
     )
     return True
+
+
+def _tempo_espera_processamento_ms(recebido_em: str | None) -> float | None:
+    if not recebido_em:
+        return None
+    try:
+        recebido = datetime.fromisoformat(recebido_em.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if recebido.tzinfo is None:
+        recebido = recebido.replace(tzinfo=timezone.utc)
+    return max((datetime.now(timezone.utc) - recebido).total_seconds() * 1000, 0.0)
 
 
 def main():

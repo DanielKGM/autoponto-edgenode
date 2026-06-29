@@ -1,6 +1,7 @@
 import argparse
 import asyncio
 import logging
+import time
 
 from app.config import AUTOPONTO_API_TOKEN, AUTOPONTO_API_URL, NODE_UUID
 from app.face_embeddings import preparar_cache_redis_com_embeddings_descriptografados
@@ -11,6 +12,7 @@ from app.redis_store import (
     podar_eventos_presenca_sincronizados,
     substituir_snapshot_redis,
 )
+from tcc_evidencias import registrar_evento, registrar_tempo
 
 logger = logging.getLogger(__name__)
 
@@ -80,6 +82,12 @@ def publicar_fetch_apos_sync(dispositivo_codigos: list[str]) -> None:
         if enviados:
             logger.info("fetch mqtt publicado para %d dispositivos", enviados)
     except Exception as exc:
+        registrar_evento(
+            "sync_falha",
+            "edge-app",
+            status="falha",
+            detalhes={"operacao": "fetch_mqtt_pos_sync", "erro": str(exc)[:300]},
+        )
         logger.warning(
             "fetch mqtt pos-sync falhou dispositivos=%d error=%s",
             len(dispositivo_codigos),
@@ -126,6 +134,16 @@ async def sincronizar_presencas_pendentes(ids: list[str] | None = None) -> bool:
             marcar_eventos_presenca_sincronizados(ids_sincronizados)
             return True
     except Exception as exc:
+        registrar_evento(
+            "sync_falha",
+            "edge-app",
+            status="falha",
+            detalhes={
+                "operacao": "attendance_push",
+                "presencas": len(presencas),
+                "erro": str(exc)[:300],
+            },
+        )
         logger.warning("attendance immediate sync failed error=%s", exc)
         return False
 
@@ -139,14 +157,57 @@ async def executar_sincronizacao(
     import httpx
 
     async with httpx.AsyncClient(timeout=20) as cliente:
-        resposta_pull = await cliente.get(
-            f"{AUTOPONTO_API_URL}/edge/pull/",
-            headers=_cabecalhos_autenticacao(),
-            params={"node_id": NODE_UUID},
-        )
-        _validar_resposta_http(resposta_pull, "pull")
+        inicio_pull = time.perf_counter()
+        status_code = None
+        try:
+            resposta_pull = await cliente.get(
+                f"{AUTOPONTO_API_URL}/edge/pull/",
+                headers=_cabecalhos_autenticacao(),
+                params={"node_id": NODE_UUID},
+            )
+            status_code = getattr(resposta_pull, "status_code", None)
+            _validar_resposta_http(resposta_pull, "pull")
+        except Exception as exc:
+            registrar_tempo(
+                "snapshot_pull_ms",
+                (time.perf_counter() - inicio_pull) * 1000,
+                "edge-app",
+                status="falha",
+                detalhes={
+                    "operacao": "pull",
+                    "status_code": status_code,
+                    "erro": str(exc)[:300],
+                },
+            )
+            registrar_evento(
+                "sync_falha",
+                "edge-app",
+                status="falha",
+                detalhes={
+                    "operacao": "pull",
+                    "status_code": status_code,
+                    "erro": str(exc)[:300],
+                },
+            )
+            raise
 
-        dispositivo_codigos = aplicar_payload_sincronizacao(resposta_pull.json())
+        registrar_tempo(
+            "snapshot_pull_ms",
+            (time.perf_counter() - inicio_pull) * 1000,
+            "edge-app",
+            detalhes={"operacao": "pull", "status_code": status_code},
+        )
+
+        try:
+            dispositivo_codigos = aplicar_payload_sincronizacao(resposta_pull.json())
+        except Exception as exc:
+            registrar_evento(
+                "sync_falha",
+                "edge-app",
+                status="falha",
+                detalhes={"operacao": "aplicar_snapshot", "erro": str(exc)[:300]},
+            )
+            raise
         publicar_fetch_apos_sync(dispositivo_codigos)
 
         if enviar_presencas:

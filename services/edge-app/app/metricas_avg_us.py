@@ -1,10 +1,15 @@
+import csv
 import logging
 from datetime import datetime
-from math import isfinite
+from math import isfinite, sqrt
 from pathlib import Path
 from threading import Lock
 
-from app.config import METRICAS_AVG_US_DISPOSITIVO_CODIGO, METRICAS_AVG_US_PATH
+from app.config import (
+    METRICAS_AVG_US_AMOSTRAS_PATH,
+    METRICAS_AVG_US_DISPOSITIVO_CODIGO,
+    METRICAS_AVG_US_PATH,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -57,28 +62,48 @@ def registrar_metricas_avg_us(
                 f"periodo_inicio={periodo_inicio}",
                 f"periodo_fim={agora}",
             ]
+
+            _registrar_amostras(
+                Path(METRICAS_AVG_US_AMOSTRAS_PATH),
+                agora,
+                dispositivo_codigo,
+                valores,
+            )
+
             for chave in AVG_US_KEYS:
                 amostra_nova = valores.get(chave)
                 media_antiga = _float_estado(estado.get(chave))
                 peso_antigo = _float_estado(estado.get(f"{chave}_count")) or 0.0
+                m2_antigo = _float_estado(estado.get(f"{chave}_m2")) or 0.0
 
                 if amostra_nova is None and media_antiga is None:
                     continue
                 if amostra_nova is None:
                     media = media_antiga
                     peso_total = peso_antigo
+                    m2 = m2_antigo
                 elif media_antiga is None or peso_antigo <= 0:
                     media, peso_total = amostra_nova
+                    m2 = 0.0
                 else:
                     media_nova, peso_novo = amostra_nova
                     peso_total = peso_antigo + peso_novo
+                    diferenca = media_nova - media_antiga
                     media = (
                         (media_antiga * peso_antigo) + (media_nova * peso_novo)
                     ) / peso_total
+                    m2 = (
+                        m2_antigo
+                        + (diferenca * diferenca * peso_antigo * peso_novo)
+                        / peso_total
+                    )
 
                 linhas.append(f"{chave}={media:.2f}")
                 if peso_total > 0:
+                    desvio_padrao = sqrt(max(m2 / peso_total, 0.0))
                     linhas.append(f"{chave}_count={_formatar_peso(peso_total)}")
+                    linhas.append(f"{chave}_desvio_padrao={desvio_padrao:.2f}")
+                    linhas.append(f"{chave}_m2={m2:.6f}")
 
             caminho.parent.mkdir(parents=True, exist_ok=True)
             temporario = caminho.with_suffix(f"{caminho.suffix}.tmp")
@@ -88,6 +113,39 @@ def registrar_metricas_avg_us(
             logger.exception(
                 "falha ao salvar metricas avg_us dispositivo_codigo=%s",
                 dispositivo_codigo,
+            )
+
+
+def _registrar_amostras(
+    caminho: Path,
+    agora: str,
+    dispositivo_codigo: str,
+    valores: dict[str, tuple[float, float]],
+) -> None:
+    if str(caminho) == str(Path(METRICAS_AVG_US_PATH)):
+        return
+
+    caminho.parent.mkdir(parents=True, exist_ok=True)
+    novo = not caminho.exists() or caminho.stat().st_size == 0
+    with caminho.open("a", encoding="utf-8", newline="") as arquivo:
+        escritor = csv.writer(arquivo)
+        if novo:
+            escritor.writerow(
+                ["timestamp", "dispositivo_codigo", "metrica", "avg_us", "avg_count"]
+            )
+        for chave in AVG_US_KEYS:
+            amostra = valores.get(chave)
+            if amostra is None:
+                continue
+            media, peso = amostra
+            escritor.writerow(
+                [
+                    agora,
+                    dispositivo_codigo,
+                    chave,
+                    f"{media:.6f}",
+                    _formatar_peso(peso),
+                ]
             )
 
 

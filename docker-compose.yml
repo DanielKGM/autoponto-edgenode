@@ -56,7 +56,10 @@ services:
       INTERSCITY_WORKERS: "${INTERSCITY_WORKERS:-1}"
       INTERSCITY_TIMEOUT_SECONDS: "${INTERSCITY_TIMEOUT_SECONDS:-5}"
       METRICAS_AVG_US_PATH: "${METRICAS_AVG_US_PATH:-/data/logs/metricas_avg_us.txt}"
+      METRICAS_AVG_US_AMOSTRAS_PATH: "${METRICAS_AVG_US_AMOSTRAS_PATH:-/data/logs/metricas_avg_us_amostras.csv}"
       METRICAS_AVG_US_DISPOSITIVO_CODIGO: "${METRICAS_AVG_US_DISPOSITIVO_CODIGO:-}"
+      TCC_EVIDENCIAS_ENABLED: "${TCC_EVIDENCIAS_ENABLED:-1}"
+      TCC_EVIDENCIAS_DIR: "${TCC_EVIDENCIAS_DIR:-/data/logs/tcc}"
     volumes:
       - ./data:/data
     depends_on:
@@ -79,7 +82,10 @@ services:
       FACE_SCORE_THRESHOLD: "${FACE_SCORE_THRESHOLD:-0.8}"
       FACE_MATCH_THRESHOLD: "${FACE_MATCH_THRESHOLD:-0.363}"
       LOG_LEVEL: "${LOG_LEVEL:-INFO}"
+      TCC_EVIDENCIAS_ENABLED: "${TCC_EVIDENCIAS_ENABLED:-1}"
+      TCC_EVIDENCIAS_DIR: "${TCC_EVIDENCIAS_DIR:-/data/logs/tcc}"
     volumes:
+      - ./data:/data
       - ./data/models:/models:ro
     depends_on:
       - redis

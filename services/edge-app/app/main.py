@@ -1,6 +1,7 @@
 from contextlib import asynccontextmanager
 import asyncio
 import logging
+import time
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
 
@@ -16,6 +17,7 @@ from app.redis_store import (
     obter_dispositivo_por_codigo,
     snapshot_redis_valido,
 )
+from tcc_evidencias import registrar_tempo
 
 logging.basicConfig(
     level=getattr(logging, LOG_LEVEL, logging.INFO),
@@ -51,6 +53,33 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(title="edge-app", lifespan=lifespan)
+
+
+@app.middleware("http")
+async def registrar_metricas_http(request: Request, call_next):
+    metricas = {
+        ("/context", "GET"): "http_context_ms",
+        ("/frame", "POST"): "http_frame_ms",
+    }
+    metrica = metricas.get((request.url.path, request.method))
+    if not metrica:
+        return await call_next(request)
+
+    inicio = time.perf_counter()
+    status_code = 500
+    try:
+        resposta = await call_next(request)
+        status_code = resposta.status_code
+        return resposta
+    finally:
+        registrar_tempo(
+            metrica,
+            (time.perf_counter() - inicio) * 1000,
+            "edge-app",
+            status="sucesso" if status_code < 400 else "falha",
+            origem=request.headers.get("x-device-id", ""),
+            detalhes={"metodo": request.method, "status_code": status_code},
+        )
 
 
 def validar_autenticacao(x_auth: str = Header(default="")) -> None:

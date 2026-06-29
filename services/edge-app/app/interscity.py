@@ -4,6 +4,7 @@ import logging
 from queue import Empty, Full, Queue
 from socket import timeout as SocketTimeout
 from threading import Event, Thread
+import time
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -15,6 +16,7 @@ from app.config import (
     RESOURCE_ADAPTOR_PATH,
 )
 from app.redis_store import obter_dispositivo_por_codigo
+from tcc_evidencias import registrar_evento, registrar_tempo
 
 logger = logging.getLogger(__name__)
 
@@ -128,6 +130,13 @@ class PublicadorInterscity:
         try:
             self._fila.put_nowait((dispositivo_codigo, capacidades, timestamp))
         except Full:
+            registrar_evento(
+                "interscity_publicacao",
+                "edge-app",
+                status="falha",
+                origem=dispositivo_codigo,
+                detalhes={"motivo": "fila_cheia"},
+            )
             logger.warning(
                 "fila interscity cheia; publicacao descartada dispositivo_codigo=%s",
                 dispositivo_codigo,
@@ -142,13 +151,30 @@ class PublicadorInterscity:
             except Empty:
                 continue
 
+            inicio = time.perf_counter()
             try:
-                publicar_capacidades_dispositivo(
+                sucesso = publicar_capacidades_dispositivo(
                     dispositivo_codigo,
                     capacidades,
                     timestamp,
                 )
+                registrar_tempo(
+                    "interscity_publicacao_ms",
+                    (time.perf_counter() - inicio) * 1000,
+                    "edge-app",
+                    status="sucesso" if sucesso else "falha",
+                    origem=dispositivo_codigo,
+                    detalhes={"capacidades": sorted(capacidades.keys())},
+                )
             except Exception:
+                registrar_tempo(
+                    "interscity_publicacao_ms",
+                    (time.perf_counter() - inicio) * 1000,
+                    "edge-app",
+                    status="falha",
+                    origem=dispositivo_codigo,
+                    detalhes={"capacidades": sorted(capacidades.keys())},
+                )
                 logger.exception(
                     "erro inesperado no worker interscity dispositivo_codigo=%s",
                     dispositivo_codigo,

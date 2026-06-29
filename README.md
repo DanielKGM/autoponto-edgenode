@@ -112,7 +112,10 @@ As variaveis estao centralizadas em `.env.example` e sao injetadas pelo
 | `INTERSCITY_WORKERS` | `1` | Numero de workers de publicacao InterSCity. |
 | `INTERSCITY_TIMEOUT_SECONDS` | `5` | Timeout por POST ao InterSCity. |
 | `METRICAS_AVG_US_PATH` | `/data/logs/metricas_avg_us.txt` | Arquivo TXT de medias `avg_us`. |
+| `METRICAS_AVG_US_AMOSTRAS_PATH` | `/data/logs/metricas_avg_us_amostras.csv` | CSV append-only das capturas `avg_us`. |
 | `METRICAS_AVG_US_DISPOSITIVO_CODIGO` | vazio | Codigo do unico dispositivo que deve alimentar o TXT. Vazio desativa o arquivo. |
+| `TCC_EVIDENCIAS_ENABLED` | `1` no compose | Habilita logs de evidencias em CSV/resumo para testes do TCC. |
+| `TCC_EVIDENCIAS_DIR` | `/data/logs/tcc` | Diretorio de `metricas_amostras.csv` e `metricas_resumo.txt`. |
 
 Gere uma chave Fernet com:
 
@@ -519,12 +522,19 @@ periodo_inicio=2026-06-19T10:00:00-03:00
 periodo_fim=2026-06-19T10:02:00-03:00
 loop=100.00
 loop_count=30
+loop_desvio_padrao=12.30
+loop_m2=4538.700000
 mqtt=200.00
 mqtt_count=30
+mqtt_desvio_padrao=25.00
+mqtt_m2=18750.000000
 ```
 
 O arquivo fica em `METRICAS_AVG_US_PATH`, por padrao
 `/data/logs/metricas_avg_us.txt`, persistido pelo volume `./data:/data`.
+O desvio padrao e ponderado entre capturas recebidas, usando `avg_count`.
+As linhas `*_m2` guardam o acumulador interno usado para continuar o calculo.
+Cada captura tambem e registrada em `METRICAS_AVG_US_AMOSTRAS_PATH`.
 
 ### `kind=pir`
 
@@ -581,6 +591,24 @@ registra warning e continua operando localmente.
 Para testes sem recurso/capacidade cadastrados, deixe `INTERSCITY_API_URL` vazio
 ou nao envie `interscity_uuid` no pull dos dispositivos.
 
+## Metricas E Evidencias Para O TCC
+
+O edge gera evidencias locais para Metodologia e Analise dos Resultados:
+
+| Arquivo | Uso |
+| --- | --- |
+| `/data/logs/tcc/metricas_amostras.csv` | Linhas append-only das amostras HTTP, fila, reconhecimento, sync e InterSCity. |
+| `/data/logs/tcc/metricas_resumo.txt` | Quantidade, media e desvio padrao amostral por metrica. |
+| `/data/logs/metricas_avg_us.txt` | Media ponderada e desvio padrao ponderado de `avg_us` do dispositivo selecionado. |
+| `/data/logs/metricas_avg_us_amostras.csv` | Amostras append-only das capturas `avg_us`. |
+
+As metricas gerais sao habilitadas por `TCC_EVIDENCIAS_ENABLED=1`, com saida em
+`TCC_EVIDENCIAS_DIR`. As metricas `avg_us` continuam condicionadas a
+`METRICAS_AVG_US_DISPOSITIVO_CODIGO`.
+
+A matriz de metricas e os diagramas Mermaid usados no TCC estao em
+[docs/tcc-evidencias.md](docs/tcc-evidencias.md).
+
 ## Agendamento De Sync
 
 O edge nao busca horarios padrao UFMA na API principal. Os horarios usados para
@@ -632,7 +660,7 @@ Volumes e mounts:
 | --- | --- |
 | `redis_data` | AOF e snapshots Redis em `/data` do container. |
 | `mosquitto_data` | Persistencia do broker Mosquitto. |
-| `./data:/data` | Logs locais e TXT de metricas do `edge-app`. |
+| `./data:/data` | Logs locais e metricas dos servicos. |
 | `./data/models:/models:ro` | Modelos ONNX do `face-worker`. |
 
 Redis usa AOF com `appendfsync everysec`. Mosquitto usa `persistence true`.
@@ -681,6 +709,8 @@ docker compose logs -f mosquitto
 docker compose exec redis redis-cli GET snapshot:data
 docker compose exec redis redis-cli ZCARD presenca:pendentes
 docker compose exec redis redis-cli LLEN queue:frames
+tail -n 40 data/logs/tcc/metricas_resumo.txt
+tail -n 20 data/logs/tcc/metricas_amostras.csv
 ```
 
 Validacoes locais:
@@ -704,6 +734,14 @@ Falhas comuns:
 | `ConnectError`/DNS no sync | Falha de rede/resolucao antes de chegar ao backend. |
 | `400` com `node_id` | Token pode estar aceito, mas `NODE_UUID` nao corresponde ao no esperado pelo backend. |
 | Dispositivo nao recebe `cmd/...` | Client id MQTT nao bate com o codigo usado nos topicos ou ACL/senha nao foram regenerados. |
+
+Limitacoes conhecidas:
+
+- O edge depende de snapshot valido do dia para reconhecer presencas.
+- Nao ha MQTT negativo quando decode, deteccao ou reconhecimento falham.
+- O sync nao roda em loop interno; depende de script manual, cron ou systemd.
+- Publicacao InterSCity falha nao bloqueia reconhecimento local e nao tem retry persistente.
+- O desvio padrao de `avg_us` e calculado entre capturas agregadas recebidas do firmware.
 
 Os diretorios `referencia-api/` e `referencia-firmware/` sao referencias locais
 ignoradas pelo Git e nao fazem parte do contrato versionado deste projeto.
