@@ -18,7 +18,7 @@ desde que tenha recebido um snapshot valido do dia.
 ```mermaid
 flowchart LR
   ESP32[ESP32] -->|GET /context<br/>POST /frame| EdgeApp[edge-app]
-  ESP32 <-->|MQTT log/{codigo}<br/>cmd/{codigo}| Mosquitto[mosquitto]
+  ESP32 <-->|MQTT log/codigo<br/>cmd/codigo| Mosquitto[mosquitto]
   Mosquitto -->|logs por kind| EdgeApp
   EdgeApp <-->|snapshot, filas, presencas| Redis[redis]
   FaceWorker[face-worker] <-->|frames, embeddings, eventos| Redis
